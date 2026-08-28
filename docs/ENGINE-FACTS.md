@@ -154,9 +154,9 @@ Column 12 (pct) existence: confirm against raw fixture lines (kept verbatim in g
 - Resource ids are a path-string hash (int); collisions theoretically possible, never
   observed at ~2.9k resources. Your engine's caller-key model sidesteps this class.
 
-## §extraction — the Gaborator subset (context now, in-engine later)
+## §extraction — the Gaborator subset (the second deliverable — SPEC §extraction)
 
-Upstream extraction chain (NOT built in v0; documented so the dependency has a designed exit):
+Upstream extraction chain (yours to rebuild, after matcher parity):
 
 1. Decode to mono 16 kHz.
 2. **Gaborator** (C++ via JNI): log-frequency Gabor transform — constant-Q-like magnitude
@@ -170,12 +170,16 @@ Upstream extraction chain (NOT built in v0; documented so the dependency has a d
    FP_MAX_FREQ_DIST=128 bins (inner loops break early on time distance).
 5. Hash per §hash; emit (hash, t1, f1).
 
-A future in-engine extractor (rustfft or any solid CQT/Gabor crate — established libraries
-welcome) must reproduce steps 2–5 under the §config pin. Validation standard is print-set
-agreement against Panako's cached dumps on specimen audio (high overlap, not bit-exactness —
-peak picking near ties may legitimately differ). Design seam in v0: the conversion layer
-(bins↔Hz, bins↔seconds) and the print types live where an extractor plugs in without touching
-store or matcher.
+Your extractor (rustfft or any solid CQT/Gabor crate — established libraries welcome; the
+Gaborator itself is analysis with log-spaced Gaussian-windowed bands, so a well-built CQT is
+the same mathematical object) reproduces steps 2–5 under the §config pin, with **Panako's
+exact hash packing** (§hash) so prints stay store-interoperable. Bit-exactness is ruled
+not-required — peak picking near ties legitimately differs, and a different-but-equally-good
+peak set is acceptable; the two-tier validation in SPEC §extraction is the standard. Decode +
+resample to 16 kHz mono is a front-end concern (ffmpeg subprocess is acceptable; pure-Rust
+decode/resample crates welcome) — note the resampler choice affects peaks slightly, which the
+tolerance absorbs. The fixture windows (`queries/*/window.wav`) are pre-decoded 44.1 kHz mono
+WAV: your front resamples them, sidestepping compressed-codec variance for validation.
 
 ## §upstream — where to verify [V]
 

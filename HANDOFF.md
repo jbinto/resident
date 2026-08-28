@@ -12,7 +12,9 @@ A 20-year radio-DJ archive (~2,900 recordings, ~2 hours each) was fingerprinted 
 already-extracted fingerprints (plain-text dumps, provided), builds its own on-disk store, and
 answers match questions over a simple JSON protocol — including question shapes the Java tool
 cannot ask, like "compare stored recording A's window against stored recording B" with no audio
-in the loop. **This is not a port.** Panako is the *oracle*: golden fixtures in `fixtures/` are
+in the loop. It also grows its own extraction lane (audio → fingerprints, same hash family) so
+the Java tool and its C++ transform dependency can exit the system entirely.
+**This is not a port.** Panako is the *oracle*: golden fixtures in `fixtures/` are
 its recorded answers, and your engine must reproduce them. How you get there — data structures,
 file formats, internals — is yours to design. Where Panako's code has papercuts (they are
 catalogued), you are explicitly required NOT to reproduce them.
@@ -42,7 +44,11 @@ The files that matter: `PanakoStrategy.java` (matcher, lines 263–496), `Panako
    Behavioral checks, no jar golden — see SPEC §acceptance.
 4. **The daemon loop**: JSON-lines over stdin/stdout per CONTRACT.md.
 5. **`ingest`/`retire`/`stats`**, generation swap.
-6. **REPORT.md** — see below.
+6. **The extraction lane** (SPEC §extraction): `extract`/`enroll`, validated two-tier against
+   the fixture windows' audio + prints. This is what makes the system fully independent of
+   Java and the Gaborator — build it after the matcher gate is green, and report honestly how
+   far it got.
+7. **REPORT.md** — see below.
 
 ## Definition of done
 

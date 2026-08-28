@@ -13,6 +13,9 @@ Regenerate only there; never hand-edit.
 - `queries/<name>/golden.json` — the jar's answer for those prints against a store built from
   `store-dump/` (the same mini store). `rows` carry parsed fields plus each raw output line
   verbatim (13th-column check, formatting questions: consult `raw`).
+- `queries/<name>/window.wav` — the window's actual audio (44.1 kHz mono WAV, pre-decoded).
+  The extraction lane's validation input: extract from this, compare against `prints.tdb`
+  (print tier) and against `golden.json` via your own matcher (match tier) — SPEC §extraction.
 - `manifest.json` — jar sha, upstream commit, full config snapshot, resource list,
   `known_pairs` (which resources share material, with production-measured span sizes — the
   behavioral targets for `span`/`crosscheck`).

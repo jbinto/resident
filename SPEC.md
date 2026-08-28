@@ -93,19 +93,40 @@ Catalogued from production scar tissue; each is a design input:
    explicit error unless `replace: true`.
 6. **JVM ceremony**: no reflection flags, no GC tuning, no startup cost worth caching around.
 
+## Extraction — the second deliverable (shed the dependency across the board)
+
+The mission is full independence from Panako AND the Gaborator, not just the matcher. After
+the matcher gate is green, build the extraction lane per ENGINE-FACTS.md §extraction: audio in
+(decode/resample may shell to ffmpeg, or use established pure-Rust crates — your call) →
+log-frequency transform → event-point picking → triplet pairing → **Panako's exact hash
+packing** (§hash — keeping the hash and config pin is what keeps stores interoperable and
+jar-A/B possible). New verbs: `extract` (audio path → prints) and `enroll` (audio path →
+extract + ingest).
+
+**Bit-exactness with Panako's prints is explicitly NOT required** (ruled by the owner: a full
+re-fingerprint of the corpus is an acceptable cutover). The acceptance standard is two-tier,
+against the fixture windows' audio (`queries/*/window.wav`, 44.1 kHz mono, pre-decoded):
+
+- **Print-tier**: extract each window; compare against the jar's own prints for the same file
+  (`prints.tdb`). Report per-window print-set overlap (a hash+t-proximity match fraction).
+  Target: high overlap (think majority-to-most, not all); report the number, don't chase 100%.
+- **Match-tier (the one that matters)**: feed YOUR extracted prints into YOUR matcher against
+  the fixture store; compare answers with golden.json at the level that decides real
+  questions: same references found, spans overlapping the golden spans, scores the same order
+  of magnitude. Perfect row-equality is not expected (different peaks ⇒ different hit counts).
+
+Timebox honesty: matcher parity is the hard requirement of this build; extraction is built
+second and reported honestly in REPORT.md if unfinished — a clean, tested extract lane at 80%
+overlap beats an unfinished everything.
+
 ## Scope boundaries (see docs/SCOPE.md for the full list)
 
-Only the subset we use: STRATEGY=PANAKO matching under the one pinned config in
-ENGINE-FACTS.md §config. No OLAF, no monitor/sync mode, no extraction, no audio decode, no
-IDF. **Boundary awareness is a feature**: paths outside the subset return `unsupported`
-errors naming what was asked; nothing silently approximates.
+Only the subset we use: STRATEGY=PANAKO semantics under the one pinned config in
+ENGINE-FACTS.md §config. No OLAF, no monitor/sync mode, no IDF. **Boundary awareness is a
+feature**: paths outside the subset return `unsupported` errors naming what was asked; nothing
+silently approximates.
 
-Two structural allowances for known future work (design for, don't build):
-- **Extraction lands here eventually** (killing the Java+Gaborator dependency entirely).
-  ENGINE-FACTS.md §extraction specs the transform subset. Now: implement the bin↔Hz and
-  time-bin↔seconds conversion layer (needed for output anyway) in a module where a future
-  extractor naturally plugs in; keep print-producing types constructible from a future
-  in-engine extractor, not welded to dump parsing.
+One structural allowance for known future work (design for, don't build):
 - **Multi-line matches**: the jar votes ONE dominant time-offset line per (query, ref) and
   deletes the rest of the hit cloud as noise — which erases DJ blends/doubles. v0 emits
   jar-parity single lines (the oracle demands it), but structure the voter so ranked secondary

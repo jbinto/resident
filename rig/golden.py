@@ -50,7 +50,8 @@ def load_meta():
         lines = open(mf).read().splitlines()
         if len(lines) >= 4:
             rid, dur, n, path = lines[0], float(lines[1]), int(lines[2]), lines[3]
-            if dur > 600:  # full-length resources only
+            # full-length resources with readable dump files only
+            if dur > 600 and os.access(mf, os.R_OK) and os.access(f"{CACHE}/{rid}.tdb", os.R_OK):
                 meta[path] = (rid, dur, n)
     return meta
 
@@ -59,10 +60,11 @@ def select(meta):
     for line in open(PAIRS):
         r = json.loads(line)
         s = r["self"]
-        if s not in meta or s in used:
+        if s not in meta or s in used or not os.access(s, os.R_OK):
             continue
         for e in r.get("edges", []):
-            if e["ref"] in meta and not e.get("sameSha") and e.get("spanSec", 0) >= 150:
+            if (e["ref"] in meta and not e.get("sameSha") and e.get("spanSec", 0) >= 150
+                    and os.access(e["ref"], os.R_OK)):
                 pairs.append({"self": s, "ref": e["ref"], "spanSec": e["spanSec"],
                               "windows": e["windows"], "longestRun": e["longestRun"]})
                 used.update([s, e["ref"]])
@@ -71,7 +73,7 @@ def select(meta):
             break
     if len(pairs) < N_PAIRS:
         sys.exit(f"FATAL: only {len(pairs)} usable pairs found")
-    distract = [p for p in meta if p not in used][:N_DISTRACT]
+    distract = [p for p in meta if p not in used and os.access(p, os.R_OK)][:N_DISTRACT]
     return pairs, distract
 
 def main():
@@ -90,14 +92,16 @@ def main():
 
     take_lock()
     try:
-        # 1. mini store from cached prints (no extraction)
-        jar(["store"] + COMMON + [f"PANAKO_LMDB_FOLDER={mini}", f"PANAKO_CACHE_FOLDER={CACHE}",
-             "PANAKO_USE_CACHED_PRINTS=TRUE"] + resources)
-        # 2. copy dumps
+        # 1. copy dumps FIRST — the jar's store step writes metadata back into whatever cache
+        # folder it is given (even on cached reads), so it must NEVER be pointed at the prod
+        # cache. It gets our writable dump copy instead.
         for p in resources:
             rid = meta[p][0]
             for suf in (f"{rid}.tdb", f"{rid}_meta_data.txt"):
                 shutil.copy(f"{CACHE}/{suf}", f"{dump_dir}/{suf}")
+        # 2. mini store from the copied prints (no extraction, no prod-cache mutation)
+        jar(["store"] + COMMON + [f"PANAKO_LMDB_FOLDER={mini}",
+             f"PANAKO_CACHE_FOLDER={dump_dir}", "PANAKO_USE_CACHED_PRINTS=TRUE"] + resources)
         # 3. slice query windows: pairs' selfs at 25/50/75% + one window per distractor
         specs = []  # (name, src, t0)
         for i, pr in enumerate(pairs):
@@ -149,6 +153,7 @@ def main():
         d = f"{qdir}/{name}"
         os.makedirs(d)
         shutil.copy(f"{qcache}/{qid}.tdb", f"{d}/prints.tdb")
+        shutil.copy(w, f"{d}/window.wav")
         rows = rows_by_wav.get(w, [])
         n_rows += len(rows)
         json.dump({"query": name, "source_key": src, "window": [t0, t0 + WIN],

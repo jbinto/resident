@@ -78,6 +78,15 @@ Unknown key: error `bad_request` (never a silent no-op).
 ### stats
 `{}` → store totals + per-resource `{key, duration, postings, t_min, t_max}` list.
 
+### extract — audio in, prints out (the extraction lane; SPEC §extraction)
+`{"audio_path": "<file>"}` → `{"prints": [[hash, t, f], ...], "duration": s}`
+Decode+resample to the pinned 16 kHz mono front, then transform → events → triplets → hash.
+No store interaction.
+
+### enroll — extract + ingest in one verb
+`{"audio_path": "<file>", "key": "...", "replace": false}` →
+`{"generation": "...", "postings_added": N, "duration": s}`
+
 ## Determinism
 
 Same store generation + same request ⇒ byte-identical response (modulo `id`). Stable sort
