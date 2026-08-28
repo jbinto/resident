@@ -6,6 +6,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use resident_core::{Store, load_dump_dir};
 
+mod verify;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "resident",
@@ -33,6 +35,12 @@ enum Command {
         #[arg(long)]
         store: PathBuf,
     },
+    /// Reproduce all matcher oracle fixtures and print a parity report.
+    Verify {
+        fixtures: PathBuf,
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -50,6 +58,7 @@ fn main() -> anyhow::Result<()> {
             let store = Store::open(&store)?;
             println!("{}", serde_json::to_string_pretty(&store.stats())?);
         }
+        Command::Verify { fixtures, store } => verify::run(&fixtures, store.as_deref())?,
     }
     Ok(())
 }

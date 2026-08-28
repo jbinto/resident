@@ -31,3 +31,15 @@ each shard index and reads only matching hit ranges. The fixture generation is 1
 
 `core/src/mmap_view.rs` is the sole unsafe-code exception. Its invariant is that published
 shard paths are immutable and the backing file remains open for the mapping's lifetime.
+
+## Matching
+
+`core/src/matcher.rs` performs a ±2 hash lookup, groups hits by resource, fits Panako's
+dominant offset line, applies factor/residual/duration/coverage gates, and returns stable
+score-descending rows. Lookup of distinct probe hashes is parallel; voting per candidate is
+parallel. Evidence retains filtered hits, leading offset bins, and per-second density only
+when requested.
+
+Compatibility-specific behavior—duplicate probe hashes, Java float arithmetic, and Java
+`HashMap` tie iteration—is contained in this module. Store ordering and public result ordering
+remain deterministic and independent of those quirks.

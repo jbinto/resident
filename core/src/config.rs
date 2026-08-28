@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 pub const SAMPLE_RATE: u32 = 16_000;
 pub const TIME_RESOLUTION: u32 = 128;
 pub const TIME_BIN_SECONDS: f64 = TIME_RESOLUTION as f64 / SAMPLE_RATE as f64;
-pub const TRANSFORM_LATENCY_SAMPLES: u32 = 48;
+pub const TRANSFORM_LATENCY_SAMPLES: u32 = 12_464;
 pub const TRANSFORM_LATENCY_SECONDS: f64 = TRANSFORM_LATENCY_SAMPLES as f64 / SAMPLE_RATE as f64;
 pub const MIN_FREQUENCY_HZ: f64 = 110.0;
 pub const MAX_FREQUENCY_HZ: f64 = 7_040.0;
@@ -24,7 +24,7 @@ pub const MAX_HASH: u64 = (1_u64 << 34) - 1;
 pub const MAX_FREQUENCY_BIN: u16 = 512;
 
 const IDENTITY: &str = concat!(
-    "panako-v0;sr=16000;step=128;latency=48;freq=110:7040:440;bpo=85;",
+    "panako-v0;sr=16000;step=128;latency=12464;freq=110:7040:440;bpo=85;",
     "filters=103:25;fp-time=2:33;fp-freq=1:128;query-range=2;",
     "hits=10:5;duration=5;coverage=.2;time-factor=.8:1.2;freq-factor=.8:1.2"
 );
@@ -55,8 +55,8 @@ mod tests {
 
     #[test]
     fn golden_time_grid_has_measured_latency() {
-        assert!((bins_to_seconds(109) - 0.875).abs() < 1e-12);
-        assert_eq!(seconds_to_bin(0.875), Some(109));
+        assert!((bins_to_seconds(12) - 0.875).abs() < 1e-12);
+        assert_eq!(seconds_to_bin(0.875), Some(12));
     }
 
     #[test]
