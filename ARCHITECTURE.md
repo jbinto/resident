@@ -11,5 +11,23 @@ integer transform bins and converted to seconds only at an API edge. Fingerprint
 plain fact tuple `(hash: u64, t: u32, f: u16)`; Panako resource ids are import metadata, not
 engine identity.
 
-Store layout and runtime data flow will be documented when those modules exist.
+## Store
 
+A store root contains `CURRENT`, immutable JSON generation manifests in `generations/`, and
+immutable binary files in `shards/`. `CURRENT` is replaced atomically only after every shard
+and the new manifest have been synced. Readers retain their mappings when a later generation
+is published.
+
+Resources are assigned deterministically across 64 shards. Each little-endian shard has a
+fixed header followed by three directly mapped regions:
+
+1. forward postings sorted by `(resource, time, hash, frequency)`;
+2. a distinct-hash index of `(hash, hit start, hit count)`;
+3. compact inverted hits sorted by `(hash, resource, time, frequency)`.
+
+The forward range for each resource is recorded in the manifest. A hash lookup binary-searches
+each shard index and reads only matching hit ranges. The fixture generation is 168 MiB for
+3,208,323 postings, which projects to about 21 GiB at production count.
+
+`core/src/mmap_view.rs` is the sole unsafe-code exception. Its invariant is that published
+shard paths are immutable and the backing file remains open for the mapping's lifetime.
