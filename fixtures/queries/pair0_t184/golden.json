@@ -1,0 +1,34 @@
+{
+ "query": "pair0_t184",
+ "source_key": "/corpus/wefunk/shows/1236/audio.m4a",
+ "window": [
+  184.0,
+  196.0
+ ],
+ "rows": [
+  {
+   "q_start": 0.979,
+   "q_stop": 10.051,
+   "ref_path": "/corpus/wefunk/shows/1236/audio.m4a",
+   "ref_id": "2146874647",
+   "ref_start": 184.979,
+   "ref_stop": 194.051,
+   "score": 110.0,
+   "time_factor": 1.0,
+   "pitch_factor": 1.0,
+   "raw": "5 ; 22 ; /scratch/resident-fixtures/wavs/pair0_t184.wav ; 0.979 ; 10.051 ; /corpus/wefunk/shows/1236/audio.m4a ; 2146874647 ; 184.979 ; 194.051 ; 110 ; 1.000 % ; 1.000 %; 1.00"
+  },
+  {
+   "q_start": 1.107,
+   "q_stop": 9.651,
+   "ref_path": "/corpus/wefunk/shows/0789/audio.m4a",
+   "ref_id": "728354308",
+   "ref_start": 4317.875,
+   "ref_stop": 4326.147,
+   "score": 30.0,
+   "time_factor": 0.971,
+   "pitch_factor": 0.968,
+   "raw": "5 ; 22 ; /scratch/resident-fixtures/wavs/pair0_t184.wav ; 1.107 ; 9.651 ; /corpus/wefunk/shows/0789/audio.m4a ; 728354308 ; 4317.875 ; 4326.147 ; 30 ; 0.971 % ; 0.968 %; 0.78"
+  }
+ ]
+}

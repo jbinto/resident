@@ -32,6 +32,12 @@ ENGINE-FACTS.md §dump). Store format: **yours to design**, under these constrai
   journaling/WAL ceremony.
 - Immutable generations: readers map a generation; writers build the next and atomically swap
   (manifest rename). Concurrent readers are trivially safe by construction.
+- Memory posture: mmap-first is the baseline AND the big-RAM strategy — the primary deploy
+  target has 128 GB RAM, so the page cache will hold the entire production store (~15–30 GB)
+  and reads run at RAM speed with zero configuration. Optional explicit accelerations
+  (prefault/mlock on open, resident in-RAM structures for the hash index) are welcome behind
+  flags; nothing may *require* big RAM — on a modest box the same binary degrades gracefully
+  to page-cache behavior.
 - Store compatibility means: ingests the provided dumps + reproduces the oracle's answers.
   The on-disk layout is private and **expected to diverge from Panako permanently**. Design
   for our access patterns, not for Panako's layout.

@@ -1,0 +1,158 @@
+{
+ "generated": "2026-08-28T21:58:24Z",
+ "jar": {
+  "path": "/scratch/Panako/build/libs/panako-2.1-all.jar",
+  "sha256": "e4ee8aca0837dd15d07325656ace075cb9dc771985a60eafff148ee17fb30003",
+  "upstream_commit": "e4b0e1d"
+ },
+ "config_snapshot": "#Mon Jun 08 19:36:32 UTC 2026\nPANAKO_QUERY_RANGE=2\nOLAF_CACHE_FOLDER=~/.panako/dbs/olaf_cache\nPANAKO_AUDIO_BLOCK_SIZE=8192\nOLAF_FP_MIN_TIME_DIST=2\nPANAKO_CACHE_FOLDER=~/.panako/dbs/panako_cache\nPANAKO_FP_MIN_TIME_DIST=2\nCHECK_DUPLICATE_FILE_NAMES=TRUE\nDECODER_PIPE_ENVIRONMENT=/bin/bash\nPANAKO_FP_MAX_FREQ_DIST=128\nOLAF_MIN_HITS_UNFILTERED=10\nDECODER_PIPE_BUFFER_SIZE=44100\nPANAKO_MAX_TIME_FACTOR=1.2\nPCH_SIZE=2048\nOLAF_STEP_SIZE=128\nPANAKO_MIN_TIME_FACTOR=0.8\nPANAKO_STORAGE=LMDB\nOLAF_QUERY_RANGE=2\nPANAKO_HIT_PART_MAX_SIZE=250\nPANAKO_MIN_FREQ_FACTOR=0.8\nPANAKO_TRANSF_TIME_RESOLUTION=128\nDECODER_PIPE_ENVIRONMENT_ARG=-c\nPANAKO_MAX_FREQ_FACTOR=1.2\nDECODER=PIPE\nOLAF_SIZE=1024\nOLAF_MIN_MATCH_DURATION=5\nPCH_OVERLAP=1024\nOLAF_FREQ_MAX_FILTER_SIZE=20\nAUDIO_DURATION_COMMAND=ffprobe -i \"%resource%\" -v quiet -show_entries format\\=duration -hide_banner -of default\\=noprint_wrappers\\=1\\:nokey\\=1\nPANAKO_USE_CACHED_PRINTS=TRUE\nPANAKO_TRANSF_REF_FREQ=440\nOLAF_MIN_SEC_WITH_MATCH=0.2\nPANAKO_TRANSF_MIN_FREQ=110\nPANAKO_MIN_HITS_UNFILTERED=10\nOLAF_MATCH_FALLBACK_TO_HIST=FALSE\nPANAKO_SAMPLE_RATE=16000\nOLAF_SAMPLE_RATE=16000\nPANAKO_FP_MAX_TIME_DIST=33\nPANAKO_FREQ_MAX_FILTER_SIZE=103\nPANAKO_LMDB_FOLDER=~/.panako/dbs/panako_db\nPANAKO_TRANSF_MAX_FREQ=7040\nPANAKO_MIN_HITS_FILTERED=5\nPANAKO_MIN_MATCH_DURATION=5\nOLAF_LMDB_FOLDER=~/.panako/dbs/olaf_db\nOLAF_STORAGE=LMDB\nOLAF_FP_MIN_FREQ_DIST=1\nMONITOR_STEP_SIZE=25\nDECODER_PIPE_LOG_FILE=decoder_log.txt\nPANAKO_HIT_PART_DIVIDER=5\nSTRATEGY=OLAF\nOLAF_MAX_TIME_FACTOR=1.1\nAVAILABLE_PROCESSORS=1\nOLAF_CACHE_TO_FILE=TRUE\nOLAF_TIME_MAX_FILTER_SIZE=25\nPCH_SAMPLE_RATE=22050\nMONITOR_OVERLAP=5\nOLAF_FP_MAX_TIME_DIST=33\nOLAF_EPS_PER_FP=3\nPANAKO_AUDIO_BLOCK_OVERLAP=0\nPANAKO_USE_GPU_EP_EXTRACTOR=FALSE\nPANAKO_MIN_SEC_WITH_MATCH=0.2\nPANAKO_TRANSF_BANDS_PER_OCTAVE=85\nMAX_FILE_SIZE=6000\nOLAF_MIN_TIME_FACTOR=0.9\nDECODER_PIPE_COMMAND=ffmpeg -ss %input_seeking%  %number_of_seconds% -i \"%resource%\" -vn -ar %sample_rate% -ac %channels% -sample_fmt s16 -f s16le pipe\\:1\nPANAKO_CACHE_TO_FILE=TRUE\nNUMBER_OF_QUERY_RESULTS=1000\nPCH_FILES=~/.panako/dbs/pch\nPANAKO_TIME_MAX_FILTER_SIZE=25\nOLAF_USE_CACHED_PRINTS=TRUE\nOLAF_HIT_PART_MAX_SIZE=250\nOLAF_MIN_HITS_FILTERED=5\nOLAF_FP_MAX_FREQ_DIST=128\nOLAF_HIT_PART_DIVIDER=5\nOLAF_EP_MIN_FREQ_BIN=9\nPANAKO_FP_MIN_FREQ_DIST=1\n",
+ "resources": [
+  {
+   "key": "/corpus/walkuman/shows/0164/audio.mp3",
+   "resource_id": "1192171712",
+   "duration": 3401.3474,
+   "num_prints": 100990
+  },
+  {
+   "key": "/corpus/walkuman/shows/0183/audio.mp3",
+   "resource_id": "690091626",
+   "duration": 3597.3315,
+   "num_prints": 115627
+  },
+  {
+   "key": "/corpus/walkuman/shows/0191/audio.mp3",
+   "resource_id": "1972405953",
+   "duration": 3584.2595,
+   "num_prints": 116889
+  },
+  {
+   "key": "/corpus/walkuman/shows/0269/audio.mp3",
+   "resource_id": "941307907",
+   "duration": 3564.6594,
+   "num_prints": 91873
+  },
+  {
+   "key": "/corpus/walkuman/shows/0305/audio.mp3",
+   "resource_id": "686144326",
+   "duration": 3504.5474,
+   "num_prints": 113020
+  },
+  {
+   "key": "/corpus/walkuman/shows/walkuman-style-113a-114b/audio.mp3",
+   "resource_id": "1792842800",
+   "duration": 3445.5396,
+   "num_prints": 102040
+  },
+  {
+   "key": "/corpus/wefunk/shows/0271/audio.m4a",
+   "resource_id": "819880972",
+   "duration": 6984.2915,
+   "num_prints": 268342
+  },
+  {
+   "key": "/corpus/wefunk/shows/0373/audio.m4a",
+   "resource_id": "230977487",
+   "duration": 6708.7397,
+   "num_prints": 236784
+  },
+  {
+   "key": "/corpus/wefunk/shows/0404/audio.m4a",
+   "resource_id": "1234590358",
+   "duration": 6987.78,
+   "num_prints": 243037
+  },
+  {
+   "key": "/corpus/wefunk/shows/0414/audio.m4a",
+   "resource_id": "642478915",
+   "duration": 6696.0356,
+   "num_prints": 255652
+  },
+  {
+   "key": "/corpus/wefunk/shows/0644/audio.m4a",
+   "resource_id": "2094650248",
+   "duration": 7500.5234,
+   "num_prints": 252610
+  },
+  {
+   "key": "/corpus/wefunk/shows/0764/audio.m4a",
+   "resource_id": "196847114",
+   "duration": 7542.26,
+   "num_prints": 260669
+  },
+  {
+   "key": "/corpus/wefunk/shows/0789/audio.m4a",
+   "resource_id": "728354308",
+   "duration": 7277.132,
+   "num_prints": 249388
+  },
+  {
+   "key": "/corpus/wefunk/shows/0839/audio.m4a",
+   "resource_id": "1098801918",
+   "duration": 6624.8516,
+   "num_prints": 228823
+  },
+  {
+   "key": "/corpus/wefunk/shows/1042/audio.m4a",
+   "resource_id": "965681642",
+   "duration": 7552.0596,
+   "num_prints": 298529
+  },
+  {
+   "key": "/corpus/wefunk/shows/1236/audio.m4a",
+   "resource_id": "2146874647",
+   "duration": 7501.924,
+   "num_prints": 274050
+  }
+ ],
+ "known_pairs": [
+  {
+   "self": "/corpus/wefunk/shows/1236/audio.m4a",
+   "ref": "/corpus/wefunk/shows/0789/audio.m4a",
+   "spanSec": 200.0,
+   "windows": 23,
+   "longestRun": 20,
+   "job_file": "job_001ffcd5-d86c-46f5-8663-24b6c1e994c9-panako.json"
+  },
+  {
+   "self": "/corpus/walkuman/shows/walkuman-style-113a-114b/audio.mp3",
+   "ref": "/corpus/walkuman/shows/0269/audio.mp3",
+   "spanSec": 216.0,
+   "windows": 20,
+   "longestRun": 12,
+   "job_file": "job_003c31c9-3bb8-4e61-be64-4f3670b67827-panako.json"
+  },
+  {
+   "self": "/corpus/wefunk/shows/0764/audio.m4a",
+   "ref": "/corpus/wefunk/shows/0839/audio.m4a",
+   "spanSec": 248.0,
+   "windows": 32,
+   "longestRun": 32,
+   "job_file": "job_00951f23-6c3b-41f2-8ca9-ce5ee756dcf9-panako.json"
+  },
+  {
+   "self": "/corpus/walkuman/shows/0305/audio.mp3",
+   "ref": "/corpus/walkuman/shows/0164/audio.mp3",
+   "spanSec": 232.0,
+   "windows": 27,
+   "longestRun": 10,
+   "job_file": "job_00abac13-2795-47be-ae11-4fb9f001161e-panako.json"
+  },
+  {
+   "self": "/corpus/walkuman/shows/0191/audio.mp3",
+   "ref": "/corpus/walkuman/shows/0183/audio.mp3",
+   "spanSec": 2408.0,
+   "windows": 34,
+   "longestRun": 13,
+   "job_file": "job_00b3a35e-aa44-42f7-aaa5-a59c004a7bd4-panako.json"
+  },
+  {
+   "self": "/corpus/wefunk/shows/0414/audio.m4a",
+   "ref": "/corpus/wefunk/shows/0404/audio.m4a",
+   "spanSec": 200.0,
+   "windows": 26,
+   "longestRun": 26,
+   "job_file": "job_00c3a715-f45f-41c7-aba7-404a4081c478-panako.json"
+  }
+ ],
+ "note": "known_pairs spans come from full-corpus production runs; on the mini store expect at least those overlaps between pair members."
+}

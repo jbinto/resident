@@ -1,0 +1,34 @@
+{
+ "query": "pair4_t192",
+ "source_key": "/corpus/walkuman/shows/0191/audio.mp3",
+ "window": [
+  192.0,
+  204.0
+ ],
+ "rows": [
+  {
+   "q_start": 0.899,
+   "q_stop": 10.051,
+   "ref_path": "/corpus/walkuman/shows/0191/audio.mp3",
+   "ref_id": "1972405953",
+   "ref_start": 192.899,
+   "ref_stop": 202.051,
+   "score": 195.0,
+   "time_factor": 1.0,
+   "pitch_factor": 1.0,
+   "raw": "18 ; 22 ; /scratch/resident-fixtures/wavs/pair4_t192.wav ; 0.899 ; 10.051 ; /corpus/walkuman/shows/0191/audio.mp3 ; 1972405953 ; 192.899 ; 202.051 ; 195 ; 1.000 % ; 1.000 %; 1.00"
+  },
+  {
+   "q_start": 1.283,
+   "q_stop": 9.843,
+   "ref_path": "/corpus/walkuman/shows/0183/audio.mp3",
+   "ref_id": "690091626",
+   "ref_start": 206.795,
+   "ref_stop": 215.331,
+   "score": 16.0,
+   "time_factor": 0.998,
+   "pitch_factor": 1.0,
+   "raw": "18 ; 22 ; /scratch/resident-fixtures/wavs/pair4_t192.wav ; 1.283 ; 9.843 ; /corpus/walkuman/shows/0183/audio.mp3 ; 690091626 ; 206.795 ; 215.331 ; 16 ; 0.998 % ; 1.000 %; 0.44"
+  }
+ ]
+}

@@ -1,0 +1,34 @@
+{
+ "query": "pair3_t1968",
+ "source_key": "/corpus/walkuman/shows/0305/audio.mp3",
+ "window": [
+  1968.0,
+  1980.0
+ ],
+ "rows": [
+  {
+   "q_start": 0.875,
+   "q_stop": 10.243,
+   "ref_path": "/corpus/walkuman/shows/0305/audio.mp3",
+   "ref_id": "686144326",
+   "ref_start": 1968.875,
+   "ref_stop": 1978.243,
+   "score": 359.0,
+   "time_factor": 1.0,
+   "pitch_factor": 1.0,
+   "raw": "16 ; 22 ; /scratch/resident-fixtures/wavs/pair3_t1968.wav ; 0.875 ; 10.243 ; /corpus/walkuman/shows/0305/audio.mp3 ; 686144326 ; 1968.875 ; 1978.243 ; 359 ; 1.000 % ; 1.000 %; 1.00"
+  },
+  {
+   "q_start": 1.227,
+   "q_stop": 8.603,
+   "ref_path": "/corpus/walkuman/shows/0164/audio.mp3",
+   "ref_id": "1192171712",
+   "ref_start": 1138.987,
+   "ref_stop": 1146.283,
+   "score": 13.0,
+   "time_factor": 0.989,
+   "pitch_factor": 0.984,
+   "raw": "16 ; 22 ; /scratch/resident-fixtures/wavs/pair3_t1968.wav ; 1.227 ; 8.603 ; /corpus/walkuman/shows/0164/audio.mp3 ; 1192171712 ; 1138.987 ; 1146.283 ; 13 ; 0.989 % ; 0.984 %; 0.63"
+  }
+ ]
+}

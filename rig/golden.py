@@ -66,7 +66,8 @@ def select(meta):
             if (e["ref"] in meta and not e.get("sameSha") and e.get("spanSec", 0) >= 150
                     and os.access(e["ref"], os.R_OK)):
                 pairs.append({"self": s, "ref": e["ref"], "spanSec": e["spanSec"],
-                              "windows": e["windows"], "longestRun": e["longestRun"]})
+                              "windows": e["windows"], "longestRun": e["longestRun"],
+                              "job_file": r.get("file")})
                 used.update([s, e["ref"]])
                 break
         if len(pairs) >= N_PAIRS:
@@ -102,12 +103,23 @@ def main():
         # 2. mini store from the copied prints (no extraction, no prod-cache mutation)
         jar(["store"] + COMMON + [f"PANAKO_LMDB_FOLDER={mini}",
              f"PANAKO_CACHE_FOLDER={dump_dir}", "PANAKO_USE_CACHED_PRINTS=TRUE"] + resources)
-        # 3. slice query windows: pairs' selfs at 25/50/75% + one window per distractor
+        # 3. slice query windows. For pairs, aim at positions the production artifacts PROVED
+        # cross-match this ref (blind fractional positions almost never hit the shared span);
+        # fall back to fractions when the artifact is missing.
         specs = []  # (name, src, t0)
         for i, pr in enumerate(pairs):
             dur = meta[pr["self"]][1]
-            for frac in (0.25, 0.50, 0.75):
-                specs.append((f"pair{i}_{int(frac*100)}", pr["self"], round(dur * frac, 1)))
+            starts = []
+            jf = f"/scratch/mixmd-runner/work/{pr['job_file']}"
+            if pr["job_file"] and os.path.exists(jf):
+                hits = sorted({m["query_t_start"] for m in json.load(open(jf)).get("matches", [])
+                               if m.get("matched_ref_path") == pr["ref"]})
+                if hits:  # spread: first, middle, last proven-matching window
+                    starts = sorted({hits[0], hits[len(hits) // 2], hits[-1]})
+            if not starts:
+                starts = [round(dur * f, 1) for f in (0.25, 0.50, 0.75)]
+            for t0 in starts:
+                specs.append((f"pair{i}_t{int(t0)}", pr["self"], float(t0)))
         for i, d in enumerate(distract):
             specs.append((f"lone{i}_50", d, round(meta[d][1] * 0.5, 1)))
         wav_of = {}

@@ -1,0 +1,34 @@
+{
+ "query": "pair1_t3064",
+ "source_key": "/corpus/walkuman/shows/walkuman-style-113a-114b/audio.mp3",
+ "window": [
+  3064.0,
+  3076.0
+ ],
+ "rows": [
+  {
+   "q_start": 1.211,
+   "q_stop": 10.163,
+   "ref_path": "/corpus/walkuman/shows/walkuman-style-113a-114b/audio.mp3",
+   "ref_id": "1792842800",
+   "ref_start": 3065.211,
+   "ref_stop": 3074.163,
+   "score": 110.0,
+   "time_factor": 1.0,
+   "pitch_factor": 1.0,
+   "raw": "9 ; 22 ; /scratch/resident-fixtures/wavs/pair1_t3064.wav ; 1.211 ; 10.163 ; /corpus/walkuman/shows/walkuman-style-113a-114b/audio.mp3 ; 1792842800 ; 3065.211 ; 3074.163 ; 110 ; 1.000 % ; 1.000 %; 1.00"
+  },
+  {
+   "q_start": 1.995,
+   "q_stop": 10.115,
+   "ref_path": "/corpus/walkuman/shows/0269/audio.mp3",
+   "ref_id": "941307907",
+   "ref_start": 1126.691,
+   "ref_stop": 1134.859,
+   "score": 21.0,
+   "time_factor": 1.006,
+   "pitch_factor": 1.008,
+   "raw": "9 ; 22 ; /scratch/resident-fixtures/wavs/pair1_t3064.wav ; 1.995 ; 10.115 ; /corpus/walkuman/shows/0269/audio.mp3 ; 941307907 ; 1126.691 ; 1134.859 ; 21 ; 1.006 % ; 1.008 %; 0.78"
+  }
+ ]
+}

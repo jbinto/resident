@@ -1,0 +1,46 @@
+{
+ "query": "lone1_50",
+ "source_key": "/corpus/wefunk/shows/1042/audio.m4a",
+ "window": [
+  3776.0,
+  3788.0
+ ],
+ "rows": [
+  {
+   "q_start": 0.875,
+   "q_stop": 10.227,
+   "ref_path": "/corpus/wefunk/shows/1042/audio.m4a",
+   "ref_id": "965681642",
+   "ref_start": 3776.875,
+   "ref_stop": 3786.228,
+   "score": 393.0,
+   "time_factor": 1.0,
+   "pitch_factor": 1.0,
+   "raw": "2 ; 22 ; /scratch/resident-fixtures/wavs/lone1_50.wav ; 0.875 ; 10.227 ; /corpus/wefunk/shows/1042/audio.m4a ; 965681642 ; 3776.875 ; 3786.228 ; 393 ; 1.000 % ; 1.000 %; 1.00"
+  },
+  {
+   "q_start": 1.163,
+   "q_stop": 9.987,
+   "ref_path": "/corpus/wefunk/shows/0414/audio.m4a",
+   "ref_id": "642478915",
+   "ref_start": 976.795,
+   "ref_stop": 985.435,
+   "score": 34.0,
+   "time_factor": 0.982,
+   "pitch_factor": 0.976,
+   "raw": "2 ; 22 ; /scratch/resident-fixtures/wavs/lone1_50.wav ; 1.163 ; 9.987 ; /corpus/wefunk/shows/0414/audio.m4a ; 642478915 ; 976.795 ; 985.435 ; 34 ; 0.982 % ; 0.976 %; 0.89"
+  },
+  {
+   "q_start": 1.163,
+   "q_stop": 9.539,
+   "ref_path": "/corpus/wefunk/shows/0404/audio.m4a",
+   "ref_id": "1234590358",
+   "ref_start": 1683.323,
+   "ref_stop": 1691.523,
+   "score": 23.0,
+   "time_factor": 0.982,
+   "pitch_factor": 0.992,
+   "raw": "2 ; 22 ; /scratch/resident-fixtures/wavs/lone1_50.wav ; 1.163 ; 9.539 ; /corpus/wefunk/shows/0404/audio.m4a ; 1234590358 ; 1683.323 ; 1691.523 ; 23 ; 0.982 % ; 0.992 %; 0.78"
+  }
+ ]
+}

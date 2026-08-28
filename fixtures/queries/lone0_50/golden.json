@@ -1,0 +1,22 @@
+{
+ "query": "lone0_50",
+ "source_key": "/corpus/wefunk/shows/0644/audio.m4a",
+ "window": [
+  3750.3,
+  3762.3
+ ],
+ "rows": [
+  {
+   "q_start": 1.267,
+   "q_stop": 10.107,
+   "ref_path": "/corpus/wefunk/shows/0644/audio.m4a",
+   "ref_id": "2094650248",
+   "ref_start": 3751.572,
+   "ref_stop": 3760.411,
+   "score": 285.0,
+   "time_factor": 1.0,
+   "pitch_factor": 1.008,
+   "raw": "1 ; 22 ; /scratch/resident-fixtures/wavs/lone0_50.wav ; 1.267 ; 10.107 ; /corpus/wefunk/shows/0644/audio.m4a ; 2094650248 ; 3751.572 ; 3760.411 ; 285 ; 1.000 % ; 1.008 %; 1.00"
+  }
+ ]
+}

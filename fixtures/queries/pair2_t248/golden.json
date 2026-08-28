@@ -1,0 +1,34 @@
+{
+ "query": "pair2_t248",
+ "source_key": "/corpus/wefunk/shows/0764/audio.m4a",
+ "window": [
+  248.0,
+  260.0
+ ],
+ "rows": [
+  {
+   "q_start": 1.011,
+   "q_stop": 10.235,
+   "ref_path": "/corpus/wefunk/shows/0764/audio.m4a",
+   "ref_id": "196847114",
+   "ref_start": 249.011,
+   "ref_stop": 258.235,
+   "score": 358.0,
+   "time_factor": 1.0,
+   "pitch_factor": 1.0,
+   "raw": "12 ; 22 ; /scratch/resident-fixtures/wavs/pair2_t248.wav ; 1.011 ; 10.235 ; /corpus/wefunk/shows/0764/audio.m4a ; 196847114 ; 249.011 ; 258.235 ; 358 ; 1.000 % ; 1.000 %; 1.00"
+  },
+  {
+   "q_start": 1.011,
+   "q_stop": 10.035,
+   "ref_path": "/corpus/wefunk/shows/0839/audio.m4a",
+   "ref_id": "1098801918",
+   "ref_start": 5490.116,
+   "ref_stop": 5499.14,
+   "score": 173.0,
+   "time_factor": 1.0,
+   "pitch_factor": 1.0,
+   "raw": "12 ; 22 ; /scratch/resident-fixtures/wavs/pair2_t248.wav ; 1.011 ; 10.035 ; /corpus/wefunk/shows/0839/audio.m4a ; 1098801918 ; 5490.116 ; 5499.140 ; 173 ; 1.000 % ; 1.000 %; 1.00"
+  }
+ ]
+}
