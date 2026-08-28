@@ -13,6 +13,8 @@ in the loop. Validated behaviorally against the original jar via golden fixtures
 Start with `HANDOFF.md` (the build brief), then `SPEC.md` → `docs/ENGINE-FACTS.md` →
 `CONTRACT.md` → `AGENTS.md`. Fixtures: `fixtures/README.md`. Gate: `./check.sh`.
 
+The workspace requires stable Rust and ffmpeg. Run `./check.sh` for the complete local gate.
+
 ## Map
 
 | path | what |
