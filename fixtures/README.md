@@ -5,7 +5,7 @@ Regenerate only there; never hand-edit.
 
 ## Layout
 
-- `store-dump/` — `<resourceID>.tdb` + `<resourceID>_meta_data.txt` per resource
+- `store-dump/` — `<resourceID>.tdb.zst` (zstd — decompress or stream) + `<resourceID>_meta_data.txt` per resource
   (grammar: ENGINE-FACTS §dump). Build your store from these. Keys = the source paths in the
   meta files.
 - `queries/<name>/prints.tdb` — the EXACT fingerprints the jar extracted for that query
