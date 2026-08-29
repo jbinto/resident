@@ -25,6 +25,8 @@ cargo run --release -- extract ./audio.wav
 cargo run --release -- validate-extract fixtures --store ./resident-store
 cargo run --release -- validate-stream fixtures
 cargo run --release -- validate-multiline fixtures --store ./resident-store
+cargo run --release -- refingerprint \
+  --manifest ./corpus.jsonl --output-dir ./native-dump --jobs 12
 ```
 
 The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
@@ -33,6 +35,9 @@ Its core memory is bounded for multi-hour inputs; `validate-stream` proves exact
 on every real query window and on a stitched boundary/flush fixture.
 The `match` wire verb accepts an off-by-default `multi_line` flag for ranked residual offset
 lines; ordinary `verify` proves both 22/22 flag-off parity and a two-line fixture blend.
+`refingerprint` turns a JSONL manifest (`{"key":"...","audio_path":"..."}`) into a resumable
+Panako-grammar dump directory. It logs periodic progress to stderr, writes a JSON summary to
+stdout, and records non-fatal per-audio decode errors in `failures.jsonl`.
 See `REPORT.md` for matcher parity, extraction fidelity, scale measurements, and the explicit
 performance/capability opportunity ledger.
 

@@ -99,3 +99,17 @@ that need one JSON array still choose to collect the result.
 `validate-stream` compares the bounded path with whole-file decode byte-for-byte across all
 22 real windows. It also stitches three fixture windows into 36 seconds so the gate crosses
 an internal core boundary and proves overlap plus final-window flush behavior.
+
+## Batch re-fingerprinting
+
+`resident refingerprint` reads a strict JSONL manifest and assigns each line its stable dump
+resource id. A manifest SHA-256 marker binds an output directory to those exact bytes.
+Extraction uses a Rayon pool capped by `--jobs`; each worker calls the bounded streaming
+extractor and writes prints directly to an id-specific `.tdb.partial`.
+
+The print file is synced and renamed first. Its four-line metadata file is synced and renamed
+last, making metadata the completion marker. Resume validates id, key, print grammar, and
+declared count before skipping a resource; an orphan partial or print file is overwritten.
+Decode failures remain incomplete, are retried on restart, and are written in manifest order
+to an atomically replaced `failures.jsonl`. Progress is one stderr line per configured number
+of resources; the machine-readable exit summary is one JSON object on stdout.

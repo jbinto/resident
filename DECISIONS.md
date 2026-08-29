@@ -147,3 +147,21 @@ the optimization removes planning and allocation churn without changing transfor
 
 The full native extraction validation remains unchanged after caching: 87.8% mean print
 recall, 88.6% precision, 97.3%/98.0% anchor recall/precision, and 42/44 expected references.
+
+## 2026-08-29 — make metadata the batch completion marker
+
+Assign dump ids from one-based manifest line numbers and pin each output directory to the
+SHA-256 of the exact manifest bytes. This makes ids and filenames independent of worker
+completion order and rejects accidental resume with a changed manifest.
+
+Each resource streams prints to a fixed `.partial`, syncs and renames the print file, then
+atomically publishes metadata last. A restart trusts nothing merely because it exists:
+metadata id/key, print grammar, and declared count are validated before a skip. A print file
+without metadata is incomplete and safe to overwrite. Per-audio ffmpeg/decode failures do not
+publish metadata and are retried; the final failures JSONL is sorted by manifest id and
+atomically replaced. Infrastructure and output I/O errors still abort the batch loudly.
+
+Use one Rayon pool of exactly `--jobs` threads for both file concurrency and nested band work.
+This bounds simultaneous extraction state by the operator-selected worker count on the
+12-core target. The process-kill integration test publishes at least one resource, kills the
+process, resumes, and compares every final output byte with an uninterrupted run.

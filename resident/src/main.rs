@@ -8,6 +8,7 @@ use resident_core::{Store, crosscheck, extract_audio, load_dump_dir, span};
 
 mod daemon;
 mod extract_verify;
+mod refingerprint;
 mod verify;
 
 #[derive(Debug, Parser)]
@@ -99,6 +100,17 @@ enum Command {
         #[arg(long)]
         store: Option<PathBuf>,
     },
+    /// Extract a resumable Panako-grammar dump set from a JSONL audio manifest.
+    Refingerprint {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 1)]
+        jobs: usize,
+        #[arg(long, default_value_t = 25)]
+        progress_every: usize,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -183,6 +195,12 @@ fn main() -> anyhow::Result<()> {
         Command::ValidateMultiline { fixtures, store } => {
             verify::run_multiline(&fixtures, store.as_deref())?
         }
+        Command::Refingerprint {
+            manifest,
+            output_dir,
+            jobs,
+            progress_every,
+        } => refingerprint::run(&manifest, &output_dir, jobs, progress_every)?,
     }
     Ok(())
 }
