@@ -393,6 +393,10 @@ impl Store {
         &self.manifest.resources
     }
 
+    pub fn config_id(&self) -> &str {
+        &self.manifest.config_id
+    }
+
     pub fn resource(&self, key: &str) -> Result<&ResourceInfo> {
         self.resources_by_key
             .get(key)

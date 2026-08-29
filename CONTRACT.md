@@ -48,7 +48,8 @@ may therefore repeat a `ref_key` at distinct offsets.
 
 ### span — store-vs-store: A's stored prints over a window, against B
 ```
-{"a_key": "...", "a_window": [t0, t1] | null, "b_key": "...", "evidence": false}
+{"a_key": "...", "a_window": [t0, t1] | null, "b_key": "...",
+ "b_store": "/optional/target/store", "evidence": false}
 ```
 → `{"segments": [{"a_start": s, "a_stop": s, "b_start": s, "b_stop": s, "score": int,
 "time_factor": f, "pitch_factor": f, "evidence": {...}?}, ...]}`
@@ -56,16 +57,22 @@ Probe = A's stored prints in the window (forward order), matched against B only.
 = all of A. Multiple disjoint segments are expected output (same voter, applied per
 offset-line/region — v0 may emit the single dominant segment per contiguous match region, but
 the shape stays a list).
+When `b_store` is absent/null, both resources come from the daemon's attached store. When
+present, A is still read from the attached store and B is read from that target store.
+Both stores must have the same fingerprint config identity or the request fails with
+`config_mismatch`.
 
 ### crosscheck — store-vs-store fan-out: A against many
 ```
 {"a_key": "...", "a_window": [t0, t1] | null, "targets": "all" | ["key", ...],
- "k": 25, "evidence": false}
+ "b_store": "/optional/target/store", "k": 25, "evidence": false}
 ```
 → `{"matches": [{"ref_key": "...", "segments": [...as span...], "score_total": int}, ...]}`
 Internally batched/parallel; one request, one response. Sorted score_total-desc, truncated to
 `k`. This verb is why the protocol is coarse: the N-way loop lives inside the engine, never as
 N wire calls.
+`b_store` has the same probe-A/target-B and config-identity semantics as `span`. Target
+keys and `"all"` are resolved only in B.
 
 ### ingest
 `{"dump_dir": "<dir with *.tdb + *_meta_data.txt>"}` or

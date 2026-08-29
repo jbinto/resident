@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
-use resident_core::{MatchRow, Matcher, Store, load_dump_dir, load_prints};
+use resident_core::{MatchRow, Matcher, Store, load_dump_dir, load_prints, span, span_between};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -113,6 +113,64 @@ pub(crate) fn run_multiline(fixtures: &Path, store_path: Option<&Path>) -> anyho
         Store::build(root, load_dump_dir(&fixtures.join("store-dump"))?)?
     };
     print_multiline_proof(multiline_proof(fixtures, &store)?);
+    Ok(())
+}
+
+pub(crate) fn run_cross_store(fixtures: &Path) -> anyhow::Result<()> {
+    let temporary = tempfile::tempdir().context("create cross-store fixture stores")?;
+    let mut resources = load_dump_dir(&fixtures.join("store-dump"))?;
+    resources.sort_by(|a, b| a.meta.key.cmp(&b.meta.key));
+    let full = Store::build(&temporary.path().join("full"), resources.clone())?;
+    let (even, odd): (Vec<_>, Vec<_>) = resources
+        .into_iter()
+        .enumerate()
+        .partition(|(index, _)| index.is_multiple_of(2));
+    let even: Vec<_> = even.into_iter().map(|(_, resource)| resource).collect();
+    let odd: Vec<_> = odd.into_iter().map(|(_, resource)| resource).collect();
+    let source_key = "/corpus/wefunk/shows/1236/audio.m4a";
+    let target_key = "/corpus/wefunk/shows/0789/audio.m4a";
+    let source_is_even = even.iter().any(|resource| resource.meta.key == source_key);
+    let target_is_even = even.iter().any(|resource| resource.meta.key == target_key);
+    anyhow::ensure!(
+        source_is_even != target_is_even,
+        "selected fixture pair did not straddle the split"
+    );
+    let even_count = even.len();
+    let odd_count = odd.len();
+    let even_store = Store::build(&temporary.path().join("even"), even)?;
+    let odd_store = Store::build(&temporary.path().join("odd"), odd)?;
+    let source_store = if source_is_even {
+        &even_store
+    } else {
+        &odd_store
+    };
+    let target_store = if target_is_even {
+        &even_store
+    } else {
+        &odd_store
+    };
+    let window = Some((184.0, 196.0));
+    let expected = span(&full, source_key, window, target_key, false)?;
+    anyhow::ensure!(
+        !expected.is_empty(),
+        "fixture cross-store span produced no baseline"
+    );
+    let actual = span_between(
+        source_store,
+        target_store,
+        source_key,
+        window,
+        target_key,
+        false,
+    )?;
+    anyhow::ensure!(
+        actual == expected,
+        "cross-store span differs from the single-store baseline"
+    );
+    println!(
+        "cross-store: split={even_count}+{odd_count} source={source_key} target={target_key} segments={} exact=true",
+        actual.len()
+    );
     Ok(())
 }
 

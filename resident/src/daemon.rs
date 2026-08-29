@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use resident_core::config::{MAX_FREQUENCY_BIN, MAX_HASH, bins_to_seconds};
 use resident_core::{
-    DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, crosscheck, extract_audio,
-    load_dump_dir, load_prints, span,
+    DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, crosscheck_between,
+    extract_audio, load_dump_dir, load_prints, span_between,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -38,6 +38,8 @@ enum Request {
         a_window: Option<[f64; 2]>,
         b_key: String,
         #[serde(default)]
+        b_store: Option<PathBuf>,
+        #[serde(default)]
         evidence: bool,
     },
     Crosscheck {
@@ -45,6 +47,8 @@ enum Request {
         #[serde(default)]
         a_window: Option<[f64; 2]>,
         targets: Targets,
+        #[serde(default)]
+        b_store: Option<PathBuf>,
         #[serde(default = "default_crosscheck_k")]
         k: usize,
         #[serde(default)]
@@ -222,11 +226,15 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             a_key,
             a_window,
             b_key,
+            b_store,
             evidence,
         } => {
             let store = required_store(state)?;
-            let segments = span(
+            let target_store = b_store.as_deref().map(Store::open).transpose()?;
+            let target_store = target_store.as_ref().unwrap_or(store.as_ref());
+            let segments = span_between(
                 &store,
+                target_store,
                 &a_key,
                 a_window.map(|window| (window[0], window[1])),
                 &b_key,
@@ -238,6 +246,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             a_key,
             a_window,
             targets,
+            b_store,
             k,
             evidence,
         } => {
@@ -251,8 +260,11 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                 Targets::Keys(keys) => Some(keys),
             };
             let store = required_store(state)?;
-            let matches = crosscheck(
+            let target_store = b_store.as_deref().map(Store::open).transpose()?;
+            let target_store = target_store.as_ref().unwrap_or(store.as_ref());
+            let matches = crosscheck_between(
                 &store,
+                target_store,
                 &a_key,
                 a_window.map(|window| (window[0], window[1])),
                 keys.as_deref(),
@@ -499,5 +511,16 @@ mod tests {
             panic!("expected match request");
         };
         assert!(multi_line);
+    }
+
+    #[test]
+    fn cross_store_path_defaults_to_attached_store() {
+        let request: Request =
+            serde_json::from_str(r#"{"verb":"span","a_key":"a","b_key":"b","evidence":false}"#)
+                .expect("valid span request");
+        let Request::Span { b_store, .. } = request else {
+            panic!("expected span request");
+        };
+        assert!(b_store.is_none());
     }
 }

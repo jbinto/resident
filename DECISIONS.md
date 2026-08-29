@@ -184,3 +184,21 @@ input or store corruption still aborts.
 The fixture acceptance seam compares all 22 probe sets against the same store for 100%
 agreement. Rebuilding a second store and retiring `/corpus/wefunk/shows/0789/audio.m4a`
 produces exactly three missing rows for that key and zero changes to surviving rows.
+
+## 2026-08-29 — make probe and target store roles explicit
+
+Add two-store core entry points and preserve the existing one-store `span`/`crosscheck`
+functions as wrappers that pass one snapshot for both roles. A always owns the named probe
+resource and its window; B owns the restricted target or all fan-out targets. This keeps
+reference libraries and additional corpora separate without copying them into the archive
+generation.
+
+Compare the pinned config identity before reading either role and return `config_mismatch`
+with A as expected and B as found. CLI `--b-store` and daemon `"b_store"` are optional and
+therefore byte/behavior compatible when absent. The daemon opens B as an immutable snapshot
+for the lifetime of that request.
+
+The fixture proof sorts the 16 resources, partitions alternating entries into two equal
+eight-resource stores, and selects `1236 → 0789` across the split. Cross-store span over the
+real 184–196 second pair window returns one segment exactly equal to the full single-store
+answer.

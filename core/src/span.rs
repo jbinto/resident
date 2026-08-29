@@ -36,9 +36,21 @@ pub fn span(
     b_key: &str,
     evidence: bool,
 ) -> Result<Vec<Segment>> {
-    store.resource(b_key)?;
-    let regions = region_prints(store, a_key, a_window)?;
-    let matcher = Matcher::new(store);
+    span_between(store, store, a_key, a_window, b_key, evidence)
+}
+
+pub fn span_between(
+    a_store: &Store,
+    b_store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    b_key: &str,
+    evidence: bool,
+) -> Result<Vec<Segment>> {
+    ensure_compatible(a_store, b_store)?;
+    b_store.resource(b_key)?;
+    let regions = region_prints(a_store, a_key, a_window)?;
+    let matcher = Matcher::new(b_store);
     let candidates: Vec<_> = regions
         .par_iter()
         .map(|prints| matcher.match_resource(prints, b_key, evidence))
@@ -61,28 +73,41 @@ pub fn crosscheck(
     k: usize,
     evidence: bool,
 ) -> Result<Vec<CrosscheckMatch>> {
+    crosscheck_between(store, store, a_key, a_window, targets, k, evidence)
+}
+
+pub fn crosscheck_between(
+    a_store: &Store,
+    b_store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    targets: Option<&[String]>,
+    k: usize,
+    evidence: bool,
+) -> Result<Vec<CrosscheckMatch>> {
     if k == 0 {
         return Err(Error::BadRequest("k must be greater than zero".into()));
     }
+    ensure_compatible(a_store, b_store)?;
     let target_ids = if let Some(keys) = targets {
         let mut ids = HashSet::new();
         for key in keys {
-            ids.insert(store.resource(key)?.id);
+            ids.insert(b_store.resource(key)?.id);
         }
         Some(ids)
     } else {
         None
     };
-    let regions = region_prints(store, a_key, a_window)?;
-    let matcher = Matcher::new(store);
+    let regions = region_prints(a_store, a_key, a_window)?;
+    let matcher = Matcher::new(b_store);
     let rows: Vec<_> = regions
         .par_iter()
-        .map(|prints| matcher.match_prints(prints, store.resources().len().max(1), evidence))
+        .map(|prints| matcher.match_prints(prints, b_store.resources().len().max(1), evidence))
         .collect();
     let mut by_key = BTreeMap::<String, Vec<Segment>>::new();
     for rows in rows {
         for row in rows? {
-            let resource = store.resource(&row.ref_key)?;
+            let resource = b_store.resource(&row.ref_key)?;
             if target_ids
                 .as_ref()
                 .is_some_and(|ids| !ids.contains(&resource.id))
@@ -113,6 +138,16 @@ pub fn crosscheck(
     });
     matches.truncate(k);
     Ok(matches)
+}
+
+fn ensure_compatible(a_store: &Store, b_store: &Store) -> Result<()> {
+    if a_store.config_id() != b_store.config_id() {
+        return Err(Error::ConfigMismatch {
+            expected: a_store.config_id().to_owned(),
+            found: b_store.config_id().to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn region_prints(

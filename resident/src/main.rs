@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use resident_core::{Store, crosscheck, extract_audio, load_dump_dir, span};
+use resident_core::{Store, crosscheck_between, extract_audio, load_dump_dir, span_between};
 
 mod ab_compare;
 mod daemon;
@@ -52,6 +52,8 @@ enum Command {
         #[arg(long)]
         store: PathBuf,
         #[arg(long)]
+        b_store: Option<PathBuf>,
+        #[arg(long)]
         a_key: String,
         #[arg(long)]
         b_key: String,
@@ -66,6 +68,8 @@ enum Command {
     Crosscheck {
         #[arg(long)]
         store: PathBuf,
+        #[arg(long)]
+        b_store: Option<PathBuf>,
         #[arg(long)]
         a_key: String,
         #[arg(long, default_value_t = 25)]
@@ -141,6 +145,8 @@ enum Command {
     },
     /// Exercise store agreement against the real fixtures and one retirement.
     ValidateAb { fixtures: PathBuf },
+    /// Prove cross-store span on a split fixture corpus.
+    ValidateCrossStore { fixtures: PathBuf },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -171,6 +177,7 @@ fn main() -> anyhow::Result<()> {
         Command::Verify { fixtures, store } => verify::run(&fixtures, store.as_deref())?,
         Command::Span {
             store,
+            b_store,
             a_key,
             b_key,
             start,
@@ -178,23 +185,41 @@ fn main() -> anyhow::Result<()> {
             evidence,
         } => {
             let store = Store::open(&store)?;
+            let target_store = b_store.as_deref().map(Store::open).transpose()?;
+            let target_store = target_store.as_ref().unwrap_or(&store);
             let window = start.zip(stop);
             println!(
                 "{}",
-                serde_json::to_string_pretty(&span(&store, &a_key, window, &b_key, evidence)?)?
+                serde_json::to_string_pretty(&span_between(
+                    &store,
+                    target_store,
+                    &a_key,
+                    window,
+                    &b_key,
+                    evidence
+                )?)?
             );
         }
         Command::Crosscheck {
             store,
+            b_store,
             a_key,
             k,
             evidence,
         } => {
             let store = Store::open(&store)?;
+            let target_store = b_store.as_deref().map(Store::open).transpose()?;
+            let target_store = target_store.as_ref().unwrap_or(&store);
             println!(
                 "{}",
-                serde_json::to_string_pretty(&crosscheck(
-                    &store, &a_key, None, None, k, evidence
+                serde_json::to_string_pretty(&crosscheck_between(
+                    &store,
+                    target_store,
+                    &a_key,
+                    None,
+                    None,
+                    k,
+                    evidence
                 )?)?
             );
         }
@@ -251,6 +276,7 @@ fn main() -> anyhow::Result<()> {
             evidence,
         })?,
         Command::ValidateAb { fixtures } => ab_compare::validate(&fixtures)?,
+        Command::ValidateCrossStore { fixtures } => verify::run_cross_store(&fixtures)?,
     }
     Ok(())
 }

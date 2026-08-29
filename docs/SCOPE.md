@@ -17,6 +17,8 @@ out wrong, the engine says so loudly instead of approximating.
   Panako dump grammar, with deterministic failures and atomic per-resource completion.
 - A/B agreement reports for two store generations over external probes or stored-resource
   windows, including row spans, score deltas, ranked divergences, and named evidence dumps.
+- Cross-store `span` and `crosscheck`: probe resources in A, explicit targets or an entire
+  reference/additional-corpus store in B, under one required config identity.
 - Conversion layer: time bins↔seconds, freq bins↔Hz.
 - **Extraction** (SPEC §extraction — built AFTER matcher parity is green): decode/resample
   front (ffmpeg subprocess or established crates) → log-frequency transform → event points →
@@ -44,9 +46,9 @@ out wrong, the engine says so loudly instead of approximating.
 
 1. **Unix-socket transport** for multi-client serving.
 2. **CI** — `check.sh` becomes the pipeline verbatim.
-3. **Full-corpus re-fingerprint** — once the extract lane holds, the whole corpus gets
-   re-extracted by THIS engine (~1–2 days parallel compute on the corpus machine, ruled
-   acceptable) and Panako exits the system entirely.
-4. **Full-corpus scale** — dev store is ~20 resources; production is ~2,900 / ~412M postings.
+3. **Run the full-corpus re-fingerprint and cutover** — the resumable tool and A/B gate now
+   exist; the 10–20 hour production execution remains an operator action.
+4. **Full-corpus scale validation** — dev store is ~20 resources; production is ~2,900 /
+   ~412M postings.
    Nothing in the design may assume the dev size (mmap + binary search scales; document any
    place you knowingly traded scale for simplicity).

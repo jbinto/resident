@@ -29,6 +29,8 @@ cargo run --release -- refingerprint \
   --manifest ./corpus.jsonl --output-dir ./native-dump --jobs 12
 cargo run --release -- ab-compare \
   --a-store ./jar-store --b-store ./native-store --probes-dir ./probes
+cargo run --release -- span \
+  --store ./archive-store --b-store ./reference-store --a-key archive --b-key reference
 ```
 
 The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
@@ -44,6 +46,8 @@ stdout, and records non-fatal per-audio decode errors in `failures.jsonl`.
 with `{"name":"...","key":"...","window":[start,stop]}` lines. Its pretty JSON report
 contains the exact store generations, row-level overlaps and score deltas, aggregate agreement,
 the largest divergences, and optional full rows via `--evidence QUESTION`.
+`span` and `crosscheck` accept an optional `--b-store`; daemon requests use the
+corresponding `"b_store"` field. Probe resources remain in A while targets come from B.
 See `REPORT.md` for matcher parity, extraction fidelity, scale measurements, and the explicit
 performance/capability opportunity ledger.
 
