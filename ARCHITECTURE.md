@@ -57,3 +57,12 @@ remain deterministic and independent of those quirks.
 `crosscheck` queries all targets once per region, in parallel, then groups stable raw segments
 by reference. A full 7,500-second fixture resource crosschecks the 3.2M-posting store in about
 0.5 seconds on the development Mac.
+
+## Process edge
+
+`resident daemon --store PATH` reads one JSON request per stdin line. Rayon scopes execute
+requests concurrently; a mutex writes each complete JSON response as one stdout line. Readers
+clone an `Arc<Store>` snapshot under a short lock and do not hold the lock while matching.
+Generation writers are serialized, publish a new store, then replace the shared `Arc`; older
+requests finish on their prior mappings. Malformed input and unknown verbs produce typed wire
+errors without stopping the process. Logs, when added, use stderr only.

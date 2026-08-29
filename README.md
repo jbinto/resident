@@ -15,6 +15,14 @@ Start with `HANDOFF.md` (the build brief), then `SPEC.md` → `docs/ENGINE-FACTS
 
 The workspace requires stable Rust and ffmpeg. Run `./check.sh` for the complete local gate.
 
+Core one-shot commands use explicit paths, for example:
+
+```sh
+cargo run --release -- ingest --store ./resident-store --dump-dir fixtures/store-dump
+cargo run --release -- verify fixtures --store ./resident-store
+cargo run --release -- daemon --store ./resident-store
+```
+
 ## Map
 
 | path | what |

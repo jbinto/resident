@@ -6,6 +6,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use resident_core::{Store, crosscheck, load_dump_dir, span};
 
+mod daemon;
 mod verify;
 
 #[derive(Debug, Parser)]
@@ -76,6 +77,11 @@ enum Command {
         #[arg(long)]
         key: String,
     },
+    /// Serve the v0 JSON-lines protocol over stdin/stdout.
+    Daemon {
+        #[arg(long)]
+        store: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -137,6 +143,7 @@ fn main() -> anyhow::Result<()> {
             let (_, stats) = Store::retire(&store, &key)?;
             println!("{}", serde_json::to_string_pretty(&stats)?);
         }
+        Command::Daemon { store } => daemon::run(store)?,
     }
     Ok(())
 }

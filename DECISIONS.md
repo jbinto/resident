@@ -79,3 +79,11 @@ publication, retain `CURRENT` and its immediate predecessor; remove older manife
 files referenced by neither. Unlinking an old immutable file does not invalidate an existing
 Linux mmap, so concurrent readers safely finish on their captured generation without leaving
 tombstones or unbounded derived data.
+
+## 2026-08-28 — use scoped blocking concurrency for the stdio daemon
+
+There is no network transport and no need for an async runtime. Read stdin synchronously,
+dispatch request work through Rayon, and serialize only the final stdout line. Readers capture
+an immutable `Arc<Store>`; writers use a separate mutex and swap the shared snapshot after
+publication. Responses may interleave exactly as CONTRACT permits, while bytes within one
+response never do.
