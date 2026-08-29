@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use resident_core::{Store, crosscheck, load_dump_dir, span};
+use resident_core::{Store, crosscheck, extract_audio, load_dump_dir, span};
 
 mod daemon;
+mod extract_verify;
 mod verify;
 
 #[derive(Debug, Parser)]
@@ -82,6 +83,14 @@ enum Command {
         #[arg(long)]
         store: PathBuf,
     },
+    /// Extract native fingerprints from an audio file.
+    Extract { audio_path: PathBuf },
+    /// Measure native extraction against fixture prints and match answers.
+    ValidateExtract {
+        fixtures: PathBuf,
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -144,6 +153,24 @@ fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&stats)?);
         }
         Command::Daemon { store } => daemon::run(store)?,
+        Command::Extract { audio_path } => {
+            let extraction = extract_audio(&audio_path)?;
+            let prints: Vec<_> = extraction
+                .prints
+                .iter()
+                .map(|print| [print.hash, u64::from(print.t), u64::from(print.f)])
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "prints": prints,
+                    "duration": extraction.duration,
+                }))?
+            );
+        }
+        Command::ValidateExtract { fixtures, store } => {
+            extract_verify::run(&fixtures, store.as_deref())?
+        }
     }
     Ok(())
 }

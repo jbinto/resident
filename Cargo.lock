@@ -473,6 +473,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "rayon",
  "resident-core",
  "serde",
  "serde_json",

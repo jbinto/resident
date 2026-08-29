@@ -2,10 +2,10 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
-use resident_core::config::{MAX_FREQUENCY_BIN, MAX_HASH};
+use resident_core::config::{MAX_FREQUENCY_BIN, MAX_HASH, bins_to_seconds};
 use resident_core::{
-    DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, crosscheck, load_dump_dir,
-    load_prints, span,
+    DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, crosscheck, extract_audio,
+    load_dump_dir, load_prints, span,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -288,24 +288,71 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
         }
         Request::Stats => {
             let store = required_store(state)?;
+            let resources: Vec<_> = store
+                .resources()
+                .iter()
+                .map(|resource| {
+                    json!({
+                        "key": resource.key,
+                        "duration": resource.duration,
+                        "postings": resource.postings,
+                        "t_min": bins_to_seconds(resource.t_min),
+                        "t_max": bins_to_seconds(resource.t_max),
+                    })
+                })
+                .collect();
             Ok(json!({
                 "store": store.stats(),
-                "resources": store.resources(),
+                "resources": resources,
             }))
         }
-        Request::Extract { audio_path } => Err(Error::Unsupported(format!(
-            "extract is unavailable until the native extraction lane is initialized: {}",
-            audio_path.display()
-        ))),
+        Request::Extract { audio_path } => {
+            let extraction = extract_audio(&audio_path)?;
+            Ok(json!({
+                "prints": prints_to_wire(&extraction.prints),
+                "duration": extraction.duration,
+            }))
+        }
         Request::Enroll {
             audio_path,
             key,
             replace,
-        } => Err(Error::Unsupported(format!(
-            "enroll is unavailable until the native extraction lane is initialized: path={}, key={key:?}, replace={replace}",
-            audio_path.display()
-        ))),
+        } => {
+            let extraction = extract_audio(&audio_path)?;
+            let resource = DumpResource {
+                meta: ResourceMeta {
+                    source_id: "native".into(),
+                    key,
+                    duration: extraction.duration,
+                    declared_prints: extraction.prints.len() as u64,
+                },
+                prints: extraction.prints,
+                prints_path: audio_path,
+            };
+            let _writer = state
+                .writer
+                .lock()
+                .map_err(|_| Error::Internal("writer lock poisoned".into()))?;
+            let (store, stats) = Store::ingest(&state.root, vec![resource], replace)?;
+            *state
+                .store
+                .write()
+                .map_err(|_| Error::Internal("store lock poisoned".into()))? =
+                Some(Arc::new(store));
+            Ok(json!({
+                "generation": stats.generation,
+                "postings_added": stats.postings_added,
+                "duration": extraction.duration,
+            }))
+        }
     }
+}
+
+fn prints_to_wire(prints: &[Fingerprint]) -> Vec<[u64; 3]> {
+    prints
+        .iter()
+        .map(|print| [print.hash, u64::from(print.t), u64::from(print.f)])
+        .collect()
 }
 
 fn snapshot(state: &State) -> resident_core::Result<Option<Arc<Store>>> {

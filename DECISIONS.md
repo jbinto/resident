@@ -87,3 +87,22 @@ dispatch request work through Rayon, and serialize only the final stdout line. R
 an immutable `Arc<Store>`; writers use a separate mutex and swap the shared snapshot after
 publication. Responses may interleave exactly as CONTRACT permits, while bytes within one
 response never do.
+
+## 2026-08-28 — port the analysis behavior, not Gaborator
+
+The extraction lane uses a direct safe-Rust frequency-domain formulation: one shared audio
+FFT and a truncated Gaussian kernel plus inverse FFT per retained band. This is the small
+mathematical subset needed for analysis; synthesis, Gaborator's generic coefficient store,
+multirate planner, and C++/JNI surface are absent. The direct formulation leaves a documented
+multirate optimization available but makes the compatibility boundary readable and testable.
+
+Panako's observable output also depends on JGaborator's 12,469-sample scheduling support,
+225-frame ring delay, reversed retained-band numbering, and a 4096-value max filter receiving
+only 510 coefficients. Preserve those quirks inside extraction even though the public match
+time conversion remains the fixture-proven 12,464 samples. Correcting the max-filter call
+site belongs to a future fingerprint config because it changes the hash population.
+
+Fixture validation is the acceptance boundary: exact event anchors agree at 97.3% recall and
+98.0% precision, while exact packed prints reach 87.8%/88.6% and recover 42/44 expected match
+references. This satisfies the SPEC's non-bit-exact extraction lane honestly without making
+native prints part of the already-exact matcher oracle claim.

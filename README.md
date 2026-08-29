@@ -21,7 +21,14 @@ Core one-shot commands use explicit paths, for example:
 cargo run --release -- ingest --store ./resident-store --dump-dir fixtures/store-dump
 cargo run --release -- verify fixtures --store ./resident-store
 cargo run --release -- daemon --store ./resident-store
+cargo run --release -- extract ./audio.wav
+cargo run --release -- validate-extract fixtures --store ./resident-store
 ```
+
+The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
+`enroll`. Extraction requires ffmpeg at runtime but has no JVM, JNI, or Gaborator dependency.
+See `REPORT.md` for matcher parity, extraction fidelity, scale measurements, and the explicit
+performance/capability opportunity ledger.
 
 ## Map
 

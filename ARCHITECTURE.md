@@ -66,3 +66,23 @@ clone an `Arc<Store>` snapshot under a short lock and do not hold the lock while
 Generation writers are serialized, publish a new store, then replace the shared `Arc`; older
 requests finish on their prior mappings. Malformed input and unknown verbs produce typed wire
 errors without stopping the process. Logs, when added, use stderr only.
+
+## Extraction
+
+`core/src/extract.rs` shells out to ffmpeg only for the pinned mono 16 kHz signed-PCM decode
+front. The transform itself is safe Rust and depends on `rustfft`, not Gaborator or JNI. One
+zero-padded forward spectrum is shared across 510 parallel analysis bands. Each band applies
+Gaborator v1's truncated Gaussian response, performs an inverse FFT, and samples on the
+reference power-of-two coefficient cadence before the wrapper-compatible 128-sample pooling.
+
+The event stage intentionally preserves two observable JGaborator/Panako behaviors: the
+225-frame circular-buffer delay (analysis support is 12,469 samples for scheduling) and a
+max filter constructed for 4096 values but fed a 510-band row. The latter's zero tail and
+deque update order are isolated in `lemire_vertical_max`; the horizontal pass consumes these
+vertical maxima exactly as Panako does. This compatibility sequence is covered by fixture
+validation rather than “corrected.” Triplet selection and 34-bit hash packing then follow
+Panako directly.
+
+Extraction currently holds decoded audio and a padded FFT in memory. That is suitable for
+query windows and ordinary enrollment; bounded streaming for multi-hour inputs is recorded
+as a compatible capability opportunity in `REPORT.md`.
