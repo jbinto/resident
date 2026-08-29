@@ -93,6 +93,12 @@ enum Command {
     },
     /// Prove bounded-memory extraction is identical to whole-file decoding.
     ValidateStream { fixtures: PathBuf },
+    /// Prove opt-in secondary lines on a real cross-match fixture.
+    ValidateMultiline {
+        fixtures: PathBuf,
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -174,6 +180,9 @@ fn main() -> anyhow::Result<()> {
             extract_verify::run(&fixtures, store.as_deref())?
         }
         Command::ValidateStream { fixtures } => extract_verify::run_stream(&fixtures)?,
+        Command::ValidateMultiline { fixtures, store } => {
+            verify::run_multiline(&fixtures, store.as_deref())?
+        }
     }
     Ok(())
 }

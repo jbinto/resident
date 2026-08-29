@@ -46,6 +46,12 @@ score-descending rows. Lookup of distinct probe hashes is parallel; voting per c
 parallel. Evidence retains filtered hits, leading offset bins, and per-second density only
 when requested.
 
+The `match` wire verb's off-by-default `multi_line` mode applies that unchanged voter
+repeatedly to each resource. Hits accepted by one line are removed by exact evidence identity;
+the residual cloud is voted again until it cannot pass or `k` lines have survived. All
+surviving rows are ranked by score, so one reference may appear at multiple offsets. The
+default path does not enter this loop.
+
 Compatibility-specific behavior—duplicate probe hashes, Java float arithmetic, and Java
 `HashMap` tie iteration—is contained in this module. Store ordering and public result ordering
 remain deterministic and independent of those quirks.
@@ -80,7 +86,7 @@ power-of-two coefficient cadence before the wrapper-compatible 128-sample poolin
 The event stage intentionally preserves two observable JGaborator/Panako behaviors: the
 225-frame circular-buffer delay (analysis support is 12,469 samples for scheduling) and a
 max filter constructed for 4096 values but fed a 510-band row. The latter's zero tail and
-deque update order are isolated in `lemire_vertical_max`; the horizontal pass consumes these
+deque update order are isolated in `lemire_vertical_max_row`; the horizontal pass consumes these
 vertical maxima exactly as Panako does. This compatibility sequence is covered by fixture
 validation rather than “corrected.” Triplet selection and 34-bit hash packing then follow
 Panako directly. The event detector retains 25 frames and the triplet packer retains the

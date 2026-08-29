@@ -87,7 +87,16 @@ impl<'a> Matcher<'a> {
         k: usize,
         include_evidence: bool,
     ) -> Result<Vec<MatchRow>> {
-        self.match_restricted(prints, k, include_evidence, None)
+        self.match_restricted(prints, k, include_evidence, false, None)
+    }
+
+    pub fn match_prints_multiline(
+        &self,
+        prints: &[Fingerprint],
+        k: usize,
+        include_evidence: bool,
+    ) -> Result<Vec<MatchRow>> {
+        self.match_restricted(prints, k, include_evidence, true, None)
     }
 
     pub fn match_resource(
@@ -98,9 +107,20 @@ impl<'a> Matcher<'a> {
     ) -> Result<Option<MatchRow>> {
         let id = self.store.resource(ref_key)?.id;
         Ok(self
-            .match_restricted(prints, 1, include_evidence, Some(id))?
+            .match_restricted(prints, 1, include_evidence, false, Some(id))?
             .into_iter()
             .next())
+    }
+
+    pub fn match_resource_multiline(
+        &self,
+        prints: &[Fingerprint],
+        ref_key: &str,
+        k: usize,
+        include_evidence: bool,
+    ) -> Result<Vec<MatchRow>> {
+        let id = self.store.resource(ref_key)?.id;
+        self.match_restricted(prints, k, include_evidence, true, Some(id))
     }
 
     fn match_restricted(
@@ -108,6 +128,7 @@ impl<'a> Matcher<'a> {
         prints: &[Fingerprint],
         k: usize,
         include_evidence: bool,
+        multi_line: bool,
         only_resource: Option<u32>,
     ) -> Result<Vec<MatchRow>> {
         if prints.is_empty() {
@@ -162,25 +183,82 @@ impl<'a> Matcher<'a> {
             }
         }
 
-        let candidates: Vec<_> = by_resource
-            .into_par_iter()
-            .filter_map(|(resource_id, hits)| {
-                (hits.len() >= MIN_HITS_UNFILTERED).then_some((resource_id, hits))
-            })
-            .map(|(resource_id, hits)| self.vote(resource_id, hits, include_evidence))
-            .collect();
         let mut rows = Vec::new();
-        for candidate in candidates {
-            if let Some(row) = candidate? {
-                rows.push(row);
+        if multi_line {
+            let candidates: Vec<_> = by_resource
+                .into_par_iter()
+                .filter_map(|(resource_id, hits)| {
+                    (hits.len() >= MIN_HITS_UNFILTERED).then_some((resource_id, hits))
+                })
+                .map(|(resource_id, hits)| self.vote_lines(resource_id, hits, k, include_evidence))
+                .collect();
+            for candidate in candidates {
+                rows.extend(candidate?);
+            }
+        } else {
+            let candidates: Vec<_> = by_resource
+                .into_par_iter()
+                .filter_map(|(resource_id, hits)| {
+                    (hits.len() >= MIN_HITS_UNFILTERED).then_some((resource_id, hits))
+                })
+                .map(|(resource_id, hits)| self.vote(resource_id, hits, include_evidence))
+                .collect();
+            for candidate in candidates {
+                if let Some(row) = candidate? {
+                    rows.push(row);
+                }
             }
         }
         rows.sort_by(|a, b| {
             b.score
                 .cmp(&a.score)
                 .then_with(|| a.ref_key.cmp(&b.ref_key))
+                .then_with(|| a.q_start.total_cmp(&b.q_start))
+                .then_with(|| a.ref_start.total_cmp(&b.ref_start))
         });
         rows.truncate(k);
+        Ok(rows)
+    }
+
+    fn vote_lines(
+        &self,
+        resource_id: u32,
+        mut remaining: Vec<Hit>,
+        limit: usize,
+        include_evidence: bool,
+    ) -> Result<Vec<MatchRow>> {
+        let mut rows = Vec::new();
+        while remaining.len() >= MIN_HITS_UNFILTERED && rows.len() < limit {
+            let Some(mut row) = self.vote(resource_id, remaining.clone(), true)? else {
+                break;
+            };
+            let evidence = row
+                .evidence
+                .take()
+                .expect("multiline vote always requests internal evidence");
+            let mut selected = HashMap::<(u32, u32, u64, u64), usize>::new();
+            for hit in &evidence.hits {
+                *selected
+                    .entry((hit.q_t, hit.ref_t, hit.original_hash, hit.matched_hash))
+                    .or_default() += 1;
+            }
+            remaining.retain(|hit| {
+                let key = (hit.q_t, hit.ref_t, hit.original_hash, hit.matched_hash);
+                let Some(count) = selected.get_mut(&key) else {
+                    return true;
+                };
+                if *count == 0 {
+                    true
+                } else {
+                    *count -= 1;
+                    false
+                }
+            });
+            if include_evidence {
+                row.evidence = Some(evidence);
+            }
+            rows.push(row);
+        }
         Ok(rows)
     }
 

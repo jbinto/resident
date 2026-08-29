@@ -15,6 +15,7 @@ This report is maintained during the build and finalized at handoff.
 | Replace 510 full-rate inverse FFTs with Gaborator-style octave downsampling | high (roughly 4–8× extraction throughput) | the direct full-rate formulation made the compatibility transform small and auditable; a multirate rewrite needs its own fixture proof |
 | Cache FFT plans and worker scratch across extraction requests | medium | current extraction plans once per file and allocates one spectrum per band; correctness was established before pooling state |
 | Analyze directly behind ffmpeg with one-core lookahead instead of a PCM disk spool | low–medium latency and temporary-I/O reduction | the spool makes total length and exact tail flushing explicit while already bounding RAM; the 50 TB target makes the trade safe |
+| Partition accepted multiline hits during voting instead of cloning the residual cloud and materializing internal evidence | medium for unusually dense blends, negligible in default mode | the opt-in implementation reuses the proven voter wholesale to isolate compatibility risk |
 
 ### B — performance available by departing from Panako answers
 
@@ -29,15 +30,19 @@ This report is maintained during the build and finalized at handoff.
 
 | opportunity | compatibility | relative payoff |
 |---|---|---:|
-| Emit ranked secondary offset lines for DJ blends/doubles | additive wire capability; departs from jar's one-line deletion when enabled | high |
 | Adaptive hit-cloud region finding instead of fixed independent span regions | can preserve existing raw rows behind a new mode | medium–high for long recordings |
 | Re-fingerprint with an improved native transform/config after migration | intentionally creates a new config/store identity | high; ends legacy extraction constraints |
 | Correct the legacy 4096-vs-510 max-filter call-site quirk | incompatible fingerprint population, best introduced as a v1 config | medium quality/maintainability payoff; removes an accidental oracle constraint |
+| Extend opt-in residual lines through regionized `span`/`crosscheck` | additive; default region semantics remain available | high for locating simultaneous material in long DJ recordings |
+| Replace sequential residual voting with joint line clustering that can peel rejected modes | changes enabled-mode ranking and can recover lines hidden behind a gate-failing mode | medium–high on noisy blends; no payoff to default parity |
 
 ## Results
 
 - Matcher fixture parity: **22/22**, including exact rows, scores, factors, and formatted time
   endpoints when fed the oracle prints.
+- Opt-in `match.multi_line` recovers ranked residual offsets without entering that default path.
+  The fixture-anchored blend of two real pair0 cross-match windows yields flag-off score 30
+  and two flag-on lines scored 69 and 30 at reference offsets more than 60 seconds apart.
 - Store fixture: **3,208,323 postings / 168 MiB**. This projects to about **21 GiB** for the
   412M-posting production corpus. A warm fixture verify pass is sub-millisecond per query;
   a full 7,500-second store-to-store crosscheck is about 0.5 seconds on the development Mac.

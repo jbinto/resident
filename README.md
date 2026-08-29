@@ -24,12 +24,15 @@ cargo run --release -- daemon --store ./resident-store
 cargo run --release -- extract ./audio.wav
 cargo run --release -- validate-extract fixtures --store ./resident-store
 cargo run --release -- validate-stream fixtures
+cargo run --release -- validate-multiline fixtures --store ./resident-store
 ```
 
 The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
 `enroll`. Extraction requires ffmpeg at runtime but has no JVM, JNI, or Gaborator dependency.
 Its core memory is bounded for multi-hour inputs; `validate-stream` proves exact streamed output
 on every real query window and on a stitched boundary/flush fixture.
+The `match` wire verb accepts an off-by-default `multi_line` flag for ranked residual offset
+lines; ordinary `verify` proves both 22/22 flag-off parity and a two-line fixture blend.
 See `REPORT.md` for matcher parity, extraction fidelity, scale measurements, and the explicit
 performance/capability opportunity ledger.
 

@@ -95,7 +95,80 @@ pub(crate) fn run(fixtures: &Path, store_path: Option<&Path>) -> anyhow::Result<
     if !failures.is_empty() {
         bail!("fixture parity failed: {}", failures.join(", "));
     }
+    print_multiline_proof(multiline_proof(fixtures, &store)?);
     Ok(())
+}
+
+pub(crate) fn run_multiline(fixtures: &Path, store_path: Option<&Path>) -> anyhow::Result<()> {
+    let temporary;
+    let root = if let Some(path) = store_path {
+        path
+    } else {
+        temporary = tempfile::tempdir().context("create temporary multiline store")?;
+        temporary.path()
+    };
+    let store = if root.join("CURRENT").is_file() {
+        Store::open(root)?
+    } else {
+        Store::build(root, load_dump_dir(&fixtures.join("store-dump"))?)?
+    };
+    print_multiline_proof(multiline_proof(fixtures, &store)?);
+    Ok(())
+}
+
+type MultilineProof = (String, String, String, usize, usize, usize);
+
+fn multiline_proof(fixtures: &Path, store: &Store) -> anyhow::Result<MultilineProof> {
+    let left_dir = fixtures.join("queries/pair0_t184");
+    let right_dir = fixtures.join("queries/pair0_t288");
+    let left_golden: Golden = serde_json::from_slice(&fs::read(left_dir.join("golden.json"))?)?;
+    let right_golden: Golden = serde_json::from_slice(&fs::read(right_dir.join("golden.json"))?)?;
+    let left_ref = &left_golden.rows[1].ref_path;
+    anyhow::ensure!(
+        right_golden.rows[1].ref_path == *left_ref,
+        "multiline fixtures no longer share a cross-match reference"
+    );
+    let mut blend = load_prints(&left_dir.join("prints.tdb"))?;
+    blend.extend(load_prints(&right_dir.join("prints.tdb"))?);
+    let matcher = Matcher::new(store);
+    let single: Vec<_> = matcher
+        .match_prints(&blend, 100, false)?
+        .into_iter()
+        .filter(|row| row.ref_key == *left_ref)
+        .collect();
+    anyhow::ensure!(
+        single.iter().map(|row| row.score).collect::<Vec<_>>() == [30],
+        "flag-off overlaid cross-match changed from its one fixture-proven line"
+    );
+    let lines: Vec<_> = matcher
+        .match_prints_multiline(&blend, 100, false)?
+        .into_iter()
+        .filter(|row| row.ref_key == *left_ref)
+        .collect();
+    anyhow::ensure!(
+        lines.iter().map(|row| row.score).collect::<Vec<_>>() == [69, 30],
+        "flag-on overlaid cross-match did not retain its two fixture-proven lines"
+    );
+    anyhow::ensure!(
+        (lines[0].ref_start - lines[1].ref_start).abs() > 60.0,
+        "fixture secondary did not represent a distinct reference offset"
+    );
+    Ok((
+        left_golden.query,
+        right_golden.query,
+        left_ref.clone(),
+        single[0].score,
+        lines[0].score,
+        lines[1].score,
+    ))
+}
+
+fn print_multiline_proof(
+    (left, right, ref_key, single_score, first_score, second_score): MultilineProof,
+) {
+    println!(
+        "multiline: windows={left}+{right} ref={ref_key} flag_off={single_score} flag_on={first_score},{second_score}"
+    );
 }
 
 fn compare(expected: &[GoldenRow], actual: &[MatchRow]) -> Vec<String> {

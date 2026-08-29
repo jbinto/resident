@@ -29,6 +29,8 @@ enum Request {
         k: usize,
         #[serde(default)]
         evidence: bool,
+        #[serde(default)]
+        multi_line: bool,
     },
     Span {
         a_key: String,
@@ -204,10 +206,16 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             prints_path,
             k,
             evidence,
+            multi_line,
         } => {
             let prints = wire_prints(prints, prints_path)?;
             let store = required_store(state)?;
-            let rows = Matcher::new(&store).match_prints(&prints, k, evidence)?;
+            let matcher = Matcher::new(&store);
+            let rows = if multi_line {
+                matcher.match_prints_multiline(&prints, k, evidence)?
+            } else {
+                matcher.match_prints(&prints, k, evidence)?
+            };
             Ok(json!({ "rows": rows }))
         }
         Request::Span {
@@ -472,5 +480,24 @@ mod tests {
         let response = process_line(&state, r#"{"id":"x","verb":"olaf"}"#);
         assert_eq!(response["id"], "x");
         assert_eq!(response["error"]["kind"], "unsupported");
+    }
+
+    #[test]
+    fn multiline_match_flag_defaults_off() {
+        let request: Request =
+            serde_json::from_str(r#"{"verb":"match","prints":[[1,2,3]],"k":10,"evidence":false}"#)
+                .expect("valid match request");
+        let Request::Match { multi_line, .. } = request else {
+            panic!("expected match request");
+        };
+        assert!(!multi_line);
+
+        let request: Request =
+            serde_json::from_str(r#"{"verb":"match","prints":[[1,2,3]],"multi_line":true}"#)
+                .expect("valid multiline match request");
+        let Request::Match { multi_line, .. } = request else {
+            panic!("expected match request");
+        };
+        assert!(multi_line);
     }
 }

@@ -35,13 +35,16 @@ Store block is null iff no store is attached (which is itself only legal for `pi
 ### match — jar-equivalent question: probe prints vs the whole store
 ```
 {"prints": [[hash, t, f], ...] | "prints_path": "<path to .tdb>",
- "k": 10, "evidence": false}
+ "k": 10, "evidence": false, "multi_line": false}
 ```
 → `{"rows": [{"ref_key": "...", "q_start": s, "q_stop": s, "ref_start": s, "ref_stop": s,
 "score": int, "time_factor": f, "pitch_factor": f, "sec_with_match": f, "evidence": {...}?},
 ...]}`
 Rows sorted score-desc then ref_key; truncated to `k`. Semantics = ENGINE-FACTS §matcher.
-No self-exclusion (callers do that), no merging, no score floor.
+No self-exclusion (callers do that), no merging, no score floor. `multi_line` is off by
+default and preserves jar parity when absent/false. When true, accepted lines are removed from
+each reference's residual hit cloud and the same voter is applied again; ranked secondary rows
+may therefore repeat a `ref_key` at distinct offsets.
 
 ### span — store-vs-store: A's stored prints over a window, against B
 ```

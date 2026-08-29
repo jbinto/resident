@@ -122,3 +122,17 @@ boundary on the 50 TB deployment target. `validate-stream` requires fingerprint-
 duration equality for all 22 fixture windows and for a stitched 36-second input that crosses
 an internal core boundary. The existing extraction validation remains 87.8%/88.6%, 97.3%/
 98.0% anchors, and 42/44 references.
+
+## 2026-08-28 — make residual line voting explicit and opt-in
+
+Keep `Matcher::match_prints` and an absent/false wire flag on the exact one-vote Panako path.
+When `multi_line: true`, request internal evidence from that same voter, remove the accepted
+hits by `(query time, reference time, original hash, matched hash)` multiplicity, and vote the
+residual cloud again. Stop when the voter rejects the remaining cloud or `k` accepted lines
+have been found. Rank all emitted lines score-first, so the line Panako happens to choose need
+not remain first when a stronger residual line is recovered.
+
+The fixture proof overlays the real `pair0_t184` and `pair0_t288` cross-match windows at one
+query-time origin against `/corpus/wefunk/shows/0789/audio.m4a`. The default voter emits its
+30-hit modal line; opt-in residual voting emits two distinct offsets ranked 69 then 30. The
+ordinary flag-off oracle verification remains 22/22 before this additive assertion runs.
