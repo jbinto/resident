@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use resident_core::config::{MAX_FREQUENCY_BIN, MAX_HASH, bins_to_seconds};
 use resident_core::{
     DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, crosscheck_between,
-    extract_audio, load_dump_dir, load_prints, span_between,
+    crosscheck_between_multiline, extract_audio, load_dump_dir, load_prints, span_between,
+    span_between_multiline,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -41,6 +42,8 @@ enum Request {
         b_store: Option<PathBuf>,
         #[serde(default)]
         evidence: bool,
+        #[serde(default)]
+        multi_line: bool,
     },
     Crosscheck {
         a_key: String,
@@ -53,6 +56,8 @@ enum Request {
         k: usize,
         #[serde(default)]
         evidence: bool,
+        #[serde(default)]
+        multi_line: bool,
     },
     Ingest {
         #[serde(default)]
@@ -228,18 +233,17 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             b_key,
             b_store,
             evidence,
+            multi_line,
         } => {
             let store = required_store(state)?;
             let target_store = b_store.as_deref().map(Store::open).transpose()?;
             let target_store = target_store.as_ref().unwrap_or(store.as_ref());
-            let segments = span_between(
-                &store,
-                target_store,
-                &a_key,
-                a_window.map(|window| (window[0], window[1])),
-                &b_key,
-                evidence,
-            )?;
+            let window = a_window.map(|window| (window[0], window[1]));
+            let segments = if multi_line {
+                span_between_multiline(&store, target_store, &a_key, window, &b_key, evidence)?
+            } else {
+                span_between(&store, target_store, &a_key, window, &b_key, evidence)?
+            };
             Ok(json!({ "segments": segments }))
         }
         Request::Crosscheck {
@@ -249,6 +253,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             b_store,
             k,
             evidence,
+            multi_line,
         } => {
             let keys = match targets {
                 Targets::All(value) if value == "all" => None,
@@ -262,15 +267,28 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             let store = required_store(state)?;
             let target_store = b_store.as_deref().map(Store::open).transpose()?;
             let target_store = target_store.as_ref().unwrap_or(store.as_ref());
-            let matches = crosscheck_between(
-                &store,
-                target_store,
-                &a_key,
-                a_window.map(|window| (window[0], window[1])),
-                keys.as_deref(),
-                k,
-                evidence,
-            )?;
+            let window = a_window.map(|window| (window[0], window[1]));
+            let matches = if multi_line {
+                crosscheck_between_multiline(
+                    &store,
+                    target_store,
+                    &a_key,
+                    window,
+                    keys.as_deref(),
+                    k,
+                    evidence,
+                )?
+            } else {
+                crosscheck_between(
+                    &store,
+                    target_store,
+                    &a_key,
+                    window,
+                    keys.as_deref(),
+                    k,
+                    evidence,
+                )?
+            };
             Ok(json!({ "matches": matches }))
         }
         Request::Ingest {
@@ -518,9 +536,32 @@ mod tests {
         let request: Request =
             serde_json::from_str(r#"{"verb":"span","a_key":"a","b_key":"b","evidence":false}"#)
                 .expect("valid span request");
-        let Request::Span { b_store, .. } = request else {
+        let Request::Span {
+            b_store,
+            multi_line,
+            ..
+        } = request
+        else {
             panic!("expected span request");
         };
         assert!(b_store.is_none());
+        assert!(!multi_line);
+
+        let request: Request =
+            serde_json::from_str(r#"{"verb":"crosscheck","a_key":"a","targets":"all"}"#)
+                .expect("valid crosscheck request");
+        let Request::Crosscheck { multi_line, .. } = request else {
+            panic!("expected crosscheck request");
+        };
+        assert!(!multi_line);
+
+        let request: Request = serde_json::from_str(
+            r#"{"verb":"crosscheck","a_key":"a","targets":"all","multi_line":true}"#,
+        )
+        .expect("valid multiline crosscheck request");
+        let Request::Crosscheck { multi_line, .. } = request else {
+            panic!("expected crosscheck request");
+        };
+        assert!(multi_line);
     }
 }

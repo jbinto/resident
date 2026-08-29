@@ -216,3 +216,21 @@ other resources can finish. Operational automation must inspect the JSON summary
 `failed == 0`; this is recorded prominently in `REPORT.md` rather than hidden behind an
 exit-code convention. No production throughput, RSS, or 412M-posting ingest claim is made
 without measuring the target server.
+
+## 2026-08-29 — peel residual lines independently inside query regions
+
+Extend the existing opt-in residual voter to `span` and `crosscheck` without changing their
+default functions or absent/false wire behavior. Each 30-second probe region is an independent
+hit cloud. In multiline mode its accepted lines remain score-ranked as returned by the
+matcher, while regions remain chronological; sorting secondaries by reference offset would
+discard the ranking the flag promises.
+
+For `crosscheck`, `k` continues to mean final reference count. It does not cap regional lines:
+all accepted lines contribute segments and `score_total`, after which references are ranked
+and truncated exactly as before. The cross-store config check and A-probe/B-target ownership
+apply before either single- or multiline matching.
+
+The fixture proof persists the real `pair0_t184` + `pair0_t288` overlaid prints as a source
+resource, then runs actual cross-store `span` against `0789`. The default path emits score 30;
+the opt-in path emits ranked scores 69 and 30 at distinct reference offsets. The ordinary
+single-line oracle remains 22/22.

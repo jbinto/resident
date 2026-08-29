@@ -12,7 +12,8 @@ out wrong, the engine says so loudly instead of approximating.
 - Verbs: ping · match · span · crosscheck · ingest · retire · stats · extract · enroll
   (CONTRACT.md).
 - Fixture verification harness (`verify`).
-- Opt-in ranked multi-line emission for `match`; absent/false retains jar single-line parity.
+- Opt-in ranked multi-line emission for `match`, `span`, and `crosscheck`; absent/false retains
+  jar single-line parity and original region behavior.
 - Resumable, bounded-parallel native re-fingerprinting from JSONL audio manifests to the
   Panako dump grammar, with deterministic failures and atomic per-resource completion.
 - A/B agreement reports for two store generations over external probes or stored-resource

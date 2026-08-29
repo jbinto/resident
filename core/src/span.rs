@@ -65,6 +65,40 @@ pub fn span_between(
     Ok(segments)
 }
 
+pub fn span_multiline(
+    store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    b_key: &str,
+    evidence: bool,
+) -> Result<Vec<Segment>> {
+    span_between_multiline(store, store, a_key, a_window, b_key, evidence)
+}
+
+pub fn span_between_multiline(
+    a_store: &Store,
+    b_store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    b_key: &str,
+    evidence: bool,
+) -> Result<Vec<Segment>> {
+    ensure_compatible(a_store, b_store)?;
+    b_store.resource(b_key)?;
+    let regions = region_prints(a_store, a_key, a_window)?;
+    let matcher = Matcher::new(b_store);
+    let rows: Vec<_> = regions
+        .par_iter()
+        .map(|prints| matcher.match_resource_multiline(prints, b_key, usize::MAX, evidence))
+        .collect();
+    let mut segments = Vec::new();
+    // Indexed parallel collection retains region order; Matcher ranks each region's lines.
+    for rows in rows {
+        segments.extend(rows?.into_iter().map(Segment::from));
+    }
+    Ok(segments)
+}
+
 pub fn crosscheck(
     store: &Store,
     a_key: &str,
@@ -124,6 +158,85 @@ pub fn crosscheck_between(
         .into_iter()
         .map(|(ref_key, mut segments)| {
             stable_segments(&mut segments);
+            CrosscheckMatch {
+                ref_key,
+                score_total: segments.iter().map(|segment| segment.score).sum(),
+                segments,
+            }
+        })
+        .collect();
+    matches.sort_by(|a, b| {
+        b.score_total
+            .cmp(&a.score_total)
+            .then_with(|| a.ref_key.cmp(&b.ref_key))
+    });
+    matches.truncate(k);
+    Ok(matches)
+}
+
+pub fn crosscheck_multiline(
+    store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    targets: Option<&[String]>,
+    k: usize,
+    evidence: bool,
+) -> Result<Vec<CrosscheckMatch>> {
+    crosscheck_between_multiline(store, store, a_key, a_window, targets, k, evidence)
+}
+
+pub fn crosscheck_between_multiline(
+    a_store: &Store,
+    b_store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    targets: Option<&[String]>,
+    k: usize,
+    evidence: bool,
+) -> Result<Vec<CrosscheckMatch>> {
+    if k == 0 {
+        return Err(Error::BadRequest("k must be greater than zero".into()));
+    }
+    ensure_compatible(a_store, b_store)?;
+    let target_ids = if let Some(keys) = targets {
+        let mut ids = HashSet::new();
+        for key in keys {
+            ids.insert(b_store.resource(key)?.id);
+        }
+        Some(ids)
+    } else {
+        None
+    };
+    let regions = region_prints(a_store, a_key, a_window)?;
+    let matcher = Matcher::new(b_store);
+    let rows: Vec<_> = regions
+        .par_iter()
+        .map(|prints| matcher.match_prints_multiline(prints, usize::MAX, evidence))
+        .collect();
+    // Grouping by reference must retain both chronological region order and the matcher's
+    // score rank inside a region; the default b_start ordering would discard that rank.
+    let mut by_key = BTreeMap::<String, Vec<(usize, usize, Segment)>>::new();
+    for (region_index, rows) in rows.into_iter().enumerate() {
+        for (line_rank, row) in rows?.into_iter().enumerate() {
+            let resource = b_store.resource(&row.ref_key)?;
+            if target_ids
+                .as_ref()
+                .is_some_and(|ids| !ids.contains(&resource.id))
+            {
+                continue;
+            }
+            by_key.entry(row.ref_key.clone()).or_default().push((
+                region_index,
+                line_rank,
+                row.into(),
+            ));
+        }
+    }
+    let mut matches: Vec<_> = by_key
+        .into_iter()
+        .map(|(ref_key, mut ranked)| {
+            ranked.sort_by_key(|(region_index, line_rank, _)| (*region_index, *line_rank));
+            let segments: Vec<_> = ranked.into_iter().map(|(_, _, segment)| segment).collect();
             CrosscheckMatch {
                 ref_key,
                 score_total: segments.iter().map(|segment| segment.score).sum(),

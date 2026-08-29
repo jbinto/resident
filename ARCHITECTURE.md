@@ -59,11 +59,11 @@ score-descending rows. Lookup of distinct probe hashes is parallel; voting per c
 parallel. Evidence retains filtered hits, leading offset bins, and per-second density only
 when requested.
 
-The `match` wire verb's off-by-default `multi_line` mode applies that unchanged voter
-repeatedly to each resource. Hits accepted by one line are removed by exact evidence identity;
-the residual cloud is voted again until it cannot pass or `k` lines have survived. All
-surviving rows are ranked by score, so one reference may appear at multiple offsets. The
-default path does not enter this loop.
+The off-by-default `multi_line` mode applies that unchanged voter repeatedly to each resource.
+Hits accepted by one line are removed by exact evidence identity; the residual cloud is voted
+again until it cannot pass or the applicable limit has survived. All surviving rows are
+ranked by score, so one reference may appear at multiple offsets. The default `match`, `span`,
+and `crosscheck` paths do not enter this loop.
 
 Compatibility-specific behavior—duplicate probe hashes, Java float arithmetic, and Java
 `HashMap` tie iteration—is contained in this module. Store ordering and public result ordering
@@ -76,8 +76,11 @@ remain deterministic and independent of those quirks.
 different config identities, read probe regions only from A, and resolve targets only in B.
 The original one-store functions are wrappers passing the same snapshot twice.
 
-Each region uses the same voter; no adjacent results are merged. `crosscheck` queries all
-targets once per region, in parallel, then groups stable raw segments by reference. A full
+Each region uses the same voter; no adjacent results are merged. With `multi_line` absent or
+false, one dominant result per reference and region preserves the original behavior. The
+opt-in path peels the region's residual cloud and emits its lines score-ranked inside that
+chronological region. `crosscheck` queries all targets once per region, in parallel, then
+groups segments by reference; `k` still limits final references, not regional lines. A full
 7,500-second fixture resource crosschecks the 3.2M-posting store in about 0.5 seconds on the
 development Mac. CLI `--b-store` and daemon `"b_store"` open an immutable target generation
 for the request; absence keeps the original attached-store behavior.

@@ -38,8 +38,10 @@ The daemon implements every v0 verb in `CONTRACT.md`, including native `extract`
 `enroll`. Extraction requires ffmpeg at runtime but has no JVM, JNI, or Gaborator dependency.
 Its core memory is bounded for multi-hour inputs; `validate-stream` proves exact streamed output
 on every real query window and on a stitched boundary/flush fixture.
-The `match` wire verb accepts an off-by-default `multi_line` flag for ranked residual offset
-lines; ordinary `verify` proves both 22/22 flag-off parity and a two-line fixture blend.
+The `match`, `span`, and `crosscheck` wire verbs accept an off-by-default `multi_line` flag for
+ranked residual offset lines; their CLI equivalents use `--multi-line`. Ordinary `verify`
+proves 22/22 flag-off parity, while `validate-multiline` also drives a two-line fixture blend
+through stored-resource `span`.
 `refingerprint` turns a JSONL manifest (`{"key":"...","audio_path":"..."}`) into a resumable
 Panako-grammar dump directory. It logs periodic progress to stderr, writes a JSON summary to
 stdout, and records non-fatal per-audio decode errors in `failures.jsonl`.

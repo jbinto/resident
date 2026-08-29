@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use resident_core::{Store, crosscheck_between, extract_audio, load_dump_dir, span_between};
+use resident_core::{
+    Store, crosscheck_between, crosscheck_between_multiline, extract_audio, load_dump_dir,
+    span_between, span_between_multiline,
+};
 
 mod ab_compare;
 mod daemon;
@@ -63,6 +66,8 @@ enum Command {
         stop: Option<f64>,
         #[arg(long)]
         evidence: bool,
+        #[arg(long)]
+        multi_line: bool,
     },
     /// Compare one stored resource against the store in a batched pass.
     Crosscheck {
@@ -76,6 +81,8 @@ enum Command {
         k: usize,
         #[arg(long)]
         evidence: bool,
+        #[arg(long)]
+        multi_line: bool,
     },
     /// Retire a resource by publishing a new generation without its postings.
     Retire {
@@ -183,22 +190,18 @@ fn main() -> anyhow::Result<()> {
             start,
             stop,
             evidence,
+            multi_line,
         } => {
             let store = Store::open(&store)?;
             let target_store = b_store.as_deref().map(Store::open).transpose()?;
             let target_store = target_store.as_ref().unwrap_or(&store);
             let window = start.zip(stop);
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&span_between(
-                    &store,
-                    target_store,
-                    &a_key,
-                    window,
-                    &b_key,
-                    evidence
-                )?)?
-            );
+            let segments = if multi_line {
+                span_between_multiline(&store, target_store, &a_key, window, &b_key, evidence)?
+            } else {
+                span_between(&store, target_store, &a_key, window, &b_key, evidence)?
+            };
+            println!("{}", serde_json::to_string_pretty(&segments)?);
         }
         Command::Crosscheck {
             store,
@@ -206,22 +209,17 @@ fn main() -> anyhow::Result<()> {
             a_key,
             k,
             evidence,
+            multi_line,
         } => {
             let store = Store::open(&store)?;
             let target_store = b_store.as_deref().map(Store::open).transpose()?;
             let target_store = target_store.as_ref().unwrap_or(&store);
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&crosscheck_between(
-                    &store,
-                    target_store,
-                    &a_key,
-                    None,
-                    None,
-                    k,
-                    evidence
-                )?)?
-            );
+            let matches = if multi_line {
+                crosscheck_between_multiline(&store, target_store, &a_key, None, None, k, evidence)?
+            } else {
+                crosscheck_between(&store, target_store, &a_key, None, None, k, evidence)?
+            };
+            println!("{}", serde_json::to_string_pretty(&matches)?);
         }
         Command::Retire { store, key } => {
             let (_, stats) = Store::retire(&store, &key)?;

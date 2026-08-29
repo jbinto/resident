@@ -29,8 +29,8 @@ the 2,900-file run.
 - Immutable, mmap-backed, 64-shard generations with atomic publication, idempotent ingest,
   replacement, retirement, rollback retention, and typed corruption failures.
 - Exact Panako-compatible single-line matcher, including Java float and modal-tie behavior.
-- Opt-in ranked residual lines behind `multi_line: true`; the default path remains the oracle
-  path.
+- Opt-in ranked residual lines behind `multi_line: true` for `match`, `span`, and `crosscheck`;
+  default paths remain the oracle-compatible behavior.
 - Regionized `span` and `crosscheck`, with optional distinct probe-A and target-B stores in
   core, CLI, and daemon.
 
@@ -62,8 +62,8 @@ They are fixture measurements, not production-server forecasts.
 | gate | result |
 |---|---|
 | `./check.sh` | green: fmt, clippy with warnings denied, 18 unit tests, and 2 process-level batch tests |
-| Panako matcher oracle | **22/22** exact; 20.608 ms total, 0.937 ms mean in the final optimized run |
-| Multiline additive proof | real pair0 overlay: flag off score 30; flag on ranked scores 69, 30 at distinct offsets |
+| Panako matcher oracle | **22/22** exact; 18.846 ms total, 0.857 ms mean in the final run |
+| Multiline additive proof | real pair0 overlay through both match and stored-resource span: flag off score 30; flag on ranked scores 69, 30 at distinct offsets |
 | Native print fidelity | **87.8% recall / 88.6% precision** |
 | Native anchor fidelity | **97.3% recall / 98.0% precision** |
 | Native downstream matching | **42/44** expected references |
@@ -205,8 +205,9 @@ and bytes, including the manifest marker and failures file.
    high-rate use should cache explicitly configured immutable B stores.
 7. **A/B severity is diagnostic, not policy.** Missing rows rank above non-overlap, then score
    drift. The operator must decide acceptable reference retention and score/span drift.
-8. **Multiline is only on `match`.** Regionized `span`/`crosscheck` still emit their
-   default single voter line per region.
+8. **Residual peeling is greedy.** If the next dominant residual mode fails the unchanged
+   Panako gates, peeling stops even if a weaker valid line might remain behind it. Solving that
+   requires joint clustering or another explicitly non-compatible mode.
 
 ## Recommended next steps, ranked
 
@@ -226,8 +227,8 @@ and bytes, including the manifest marker and failures file.
 7. **P2 — remove avoidable I/O and allocation costs.** Direct one-core-lookahead decode,
    bounded dump ingest, batched shard lookup, and cached configured B stores are the useful
    semantics-preserving targets.
-8. **P3 — expand additive capability.** Residual lines in regionized queries and adaptive
-   hit-cloud segmentation have more product value than further Panako emulation.
+8. **P3 — expand additive capability.** Adaptive hit-cloud segmentation and a named daemon
+   store registry have more product value than further Panako emulation.
 
 ## Opportunity ledger
 
@@ -257,7 +258,6 @@ and bytes, including the manifest marker and failures file.
 
 | opportunity | relative payoff |
 |---|---:|
-| Residual multiline output through `span`/`crosscheck` | high for simultaneous material in DJ recordings |
 | Adaptive hit-cloud regions behind a new mode | medium–high for long/non-contiguous recordings |
 | Explicit daemon registry for multiple named reference stores | medium operational simplification |
 

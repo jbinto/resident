@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
-use resident_core::{MatchRow, Matcher, Store, load_dump_dir, load_prints, span, span_between};
+use resident_core::{
+    DumpResource, MatchRow, Matcher, ResourceMeta, Store, load_dump_dir, load_prints, span,
+    span_between, span_between_multiline,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -174,7 +177,15 @@ pub(crate) fn run_cross_store(fixtures: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-type MultilineProof = (String, String, String, usize, usize, usize);
+struct MultilineProof {
+    left: String,
+    right: String,
+    ref_key: String,
+    match_single: usize,
+    match_lines: Vec<usize>,
+    span_single: usize,
+    span_lines: Vec<usize>,
+}
 
 fn multiline_proof(fixtures: &Path, store: &Store) -> anyhow::Result<MultilineProof> {
     let left_dir = fixtures.join("queries/pair0_t184");
@@ -211,22 +222,66 @@ fn multiline_proof(fixtures: &Path, store: &Store) -> anyhow::Result<MultilinePr
         (lines[0].ref_start - lines[1].ref_start).abs() > 60.0,
         "fixture secondary did not represent a distinct reference offset"
     );
-    Ok((
-        left_golden.query,
-        right_golden.query,
-        left_ref.clone(),
-        single[0].score,
-        lines[0].score,
-        lines[1].score,
-    ))
+
+    let source_root = tempfile::tempdir().context("create multiline span probe store")?;
+    let overlay_key = "fixture://pair0-overlay";
+    let source = Store::build(
+        source_root.path(),
+        vec![DumpResource {
+            meta: ResourceMeta {
+                source_id: "multiline-proof".into(),
+                key: overlay_key.into(),
+                duration: 12.0,
+                declared_prints: blend.len() as u64,
+            },
+            prints: blend,
+            prints_path: left_dir.join("prints.tdb"),
+        }],
+    )?;
+    let span_single = span_between(&source, store, overlay_key, None, left_ref, false)?;
+    anyhow::ensure!(
+        span_single.iter().map(|row| row.score).collect::<Vec<_>>() == [30],
+        "flag-off span changed from its one fixture-proven line"
+    );
+    let span_lines = span_between_multiline(&source, store, overlay_key, None, left_ref, false)?;
+    anyhow::ensure!(
+        span_lines.iter().map(|row| row.score).collect::<Vec<_>>() == [69, 30],
+        "flag-on span did not retain its two fixture-proven lines"
+    );
+    anyhow::ensure!(
+        (span_lines[0].b_start - span_lines[1].b_start).abs() > 60.0,
+        "span secondary did not represent a distinct reference offset"
+    );
+    Ok(MultilineProof {
+        left: left_golden.query,
+        right: right_golden.query,
+        ref_key: left_ref.clone(),
+        match_single: single[0].score,
+        match_lines: lines.iter().map(|row| row.score).collect(),
+        span_single: span_single[0].score,
+        span_lines: span_lines.iter().map(|row| row.score).collect(),
+    })
 }
 
-fn print_multiline_proof(
-    (left, right, ref_key, single_score, first_score, second_score): MultilineProof,
-) {
+fn print_multiline_proof(proof: MultilineProof) {
     println!(
-        "multiline: windows={left}+{right} ref={ref_key} flag_off={single_score} flag_on={first_score},{second_score}"
+        "multiline: windows={}+{} ref={} match_off={} match_on={} span_off={} span_on={}",
+        proof.left,
+        proof.right,
+        proof.ref_key,
+        proof.match_single,
+        scores(&proof.match_lines),
+        proof.span_single,
+        scores(&proof.span_lines),
     );
+}
+
+fn scores(values: &[usize]) -> String {
+    values
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn compare(expected: &[GoldenRow], actual: &[MatchRow]) -> Vec<String> {

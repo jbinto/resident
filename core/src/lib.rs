@@ -17,5 +17,8 @@ pub use extract::{
 };
 pub use fingerprint::Fingerprint;
 pub use matcher::{Evidence, MatchRow, Matcher};
-pub use span::{CrosscheckMatch, Segment, crosscheck, crosscheck_between, span, span_between};
+pub use span::{
+    CrosscheckMatch, Segment, crosscheck, crosscheck_between, crosscheck_between_multiline,
+    crosscheck_multiline, span, span_between, span_between_multiline, span_multiline,
+};
 pub use store::{IngestStats, ResourceInfo, RetireStats, Store, StoreStats};
