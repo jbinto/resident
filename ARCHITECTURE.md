@@ -32,6 +32,12 @@ each shard index and reads only matching hit ranges. The fixture generation is 1
 `core/src/mmap_view.rs` is the sole unsafe-code exception. Its invariant is that published
 shard paths are immutable and the backing file remains open for the mapping's lifetime.
 
+Ingest compares canonical per-resource content hashes. Identical resources are no-ops;
+replacement and retirement reconstruct and rewrite only affected shards, reusing every other
+content-addressed shard. The current and immediately previous manifest are retained, and
+unreferenced derived shards are removed after publication. Existing mappings remain valid on
+the Linux deployment target even when an old path is unlinked.
+
 ## Matching
 
 `core/src/matcher.rs` performs a ±2 hash lookup, groups hits by resource, fits Panako's

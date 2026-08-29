@@ -14,4 +14,4 @@ pub use error::{Error, Result};
 pub use fingerprint::Fingerprint;
 pub use matcher::{Evidence, MatchRow, Matcher};
 pub use span::{CrosscheckMatch, Segment, crosscheck, span};
-pub use store::{ResourceInfo, Store, StoreStats};
+pub use store::{IngestStats, ResourceInfo, RetireStats, Store, StoreStats};

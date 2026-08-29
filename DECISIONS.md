@@ -70,3 +70,12 @@ batched matcher call rather than making one call per target.
 
 This is a conservative v0 region definition, not a claim that 30 seconds is intrinsically
 correct. Adaptive hit-cloud segmentation is recorded in REPORT.md as a capability opportunity.
+
+## 2026-08-28 — retain one rollback generation and collect unreferenced shards
+
+Content hashes make identical ingest a true no-op. Replacement and retirement keep existing
+internal ids and rebuild only resource shards whose membership changed. After atomic
+publication, retain `CURRENT` and its immediate predecessor; remove older manifests and shard
+files referenced by neither. Unlinking an old immutable file does not invalidate an existing
+Linux mmap, so concurrent readers safely finish on their captured generation without leaving
+tombstones or unbounded derived data.

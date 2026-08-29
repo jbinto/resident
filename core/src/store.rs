@@ -58,6 +58,21 @@ pub struct StoreStats {
     pub postings: u64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct IngestStats {
+    pub generation: String,
+    pub resources_added: usize,
+    pub resources_replaced: usize,
+    pub resources_unchanged: usize,
+    pub postings_added: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RetireStats {
+    pub generation: String,
+    pub postings_removed: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StoredHit {
     pub resource_id: u32,
@@ -113,7 +128,6 @@ impl Store {
         fs::create_dir_all(root.join("shards"))
             .map_err(|source| Error::io(root.join("shards"), source))?;
 
-        let generation = generation_id(&resources);
         let mut grouped: BTreeMap<u32, Vec<(u32, DumpResource)>> = BTreeMap::new();
         for (index, resource) in resources.into_iter().enumerate() {
             let id = u32::try_from(index + 1)
@@ -133,6 +147,7 @@ impl Store {
             resource_infos.append(&mut infos);
         }
         resource_infos.sort_by_key(|resource| resource.id);
+        let generation = generation_id_from_infos(&resource_infos);
         let manifest = Manifest {
             version: STORE_VERSION,
             generation: generation.clone(),
@@ -143,6 +158,153 @@ impl Store {
         };
         publish_manifest(root, &manifest)?;
         Self::open(root)
+    }
+
+    pub fn ingest(
+        root: &Path,
+        resources: Vec<DumpResource>,
+        replace: bool,
+    ) -> Result<(Self, IngestStats)> {
+        if resources.is_empty() {
+            return Err(Error::BadRequest("ingest has no resources".into()));
+        }
+        let current = match Self::open(root) {
+            Ok(store) => store,
+            Err(Error::StoreMissing(_)) => {
+                let resources_added = resources.len();
+                let postings_added = resources
+                    .iter()
+                    .map(|resource| resource.prints.len() as u64)
+                    .sum();
+                let store = Self::build(root, resources)?;
+                let stats = IngestStats {
+                    generation: store.manifest.generation.clone(),
+                    resources_added,
+                    resources_replaced: 0,
+                    resources_unchanged: 0,
+                    postings_added,
+                };
+                return Ok((store, stats));
+            }
+            Err(error) => return Err(error),
+        };
+
+        let mut incoming = resources;
+        incoming.sort_by(|a, b| a.meta.key.cmp(&b.meta.key));
+        for pair in incoming.windows(2) {
+            if pair[0].meta.key == pair[1].meta.key {
+                return Err(Error::BadRequest(format!(
+                    "duplicate resource key {:?}",
+                    pair[0].meta.key
+                )));
+            }
+        }
+        let mut next_id = current
+            .manifest
+            .resources
+            .iter()
+            .map(|resource| resource.id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| Error::BadRequest("resource id space exhausted".into()))?;
+        let mut changes = HashMap::<String, (u32, DumpResource)>::new();
+        let mut resources_added = 0;
+        let mut resources_replaced = 0;
+        let mut resources_unchanged = 0;
+        let mut postings_added = 0;
+        for mut resource in incoming {
+            resource
+                .prints
+                .sort_by_key(|print| (print.t, print.hash, print.f));
+            let content_hash = fingerprint_content_hash(&resource.prints, resource.meta.duration);
+            if let Some(existing) = current
+                .resources_by_key
+                .get(&resource.meta.key)
+                .map(|index| &current.manifest.resources[*index])
+            {
+                if existing.content_hash == content_hash {
+                    resources_unchanged += 1;
+                    continue;
+                }
+                if !replace {
+                    return Err(Error::BadRequest(format!(
+                        "resource {:?} exists with different content; set replace=true",
+                        resource.meta.key
+                    )));
+                }
+                resources_replaced += 1;
+                postings_added += resource.prints.len() as u64;
+                changes.insert(resource.meta.key.clone(), (existing.id, resource));
+            } else {
+                let id = next_id;
+                next_id = next_id
+                    .checked_add(1)
+                    .ok_or_else(|| Error::BadRequest("resource id space exhausted".into()))?;
+                resources_added += 1;
+                postings_added += resource.prints.len() as u64;
+                changes.insert(resource.meta.key.clone(), (id, resource));
+            }
+        }
+        if changes.is_empty() {
+            let generation = current.manifest.generation.clone();
+            return Ok((
+                current,
+                IngestStats {
+                    generation,
+                    resources_added: 0,
+                    resources_replaced: 0,
+                    resources_unchanged,
+                    postings_added: 0,
+                },
+            ));
+        }
+
+        let mut affected = std::collections::BTreeSet::new();
+        for (key, (_, resource)) in &changes {
+            affected.insert(shard_for_key(&resource.meta.key));
+            if let Some(existing) = current
+                .resources_by_key
+                .get(key)
+                .map(|index| &current.manifest.resources[*index])
+            {
+                affected.insert(existing.shard);
+            }
+        }
+        let manifest = current.rebuild_changed_shards(&affected, &changes, None)?;
+        publish_manifest(root, &manifest)?;
+        let store = Self::open(root)?;
+        Ok((
+            store,
+            IngestStats {
+                generation: manifest.generation,
+                resources_added,
+                resources_replaced,
+                resources_unchanged,
+                postings_added,
+            },
+        ))
+    }
+
+    pub fn retire(root: &Path, key: &str) -> Result<(Self, RetireStats)> {
+        let current = Self::open(root)?;
+        let retired = current.resource(key)?.clone();
+        if current.manifest.resources.len() == 1 {
+            return Err(Error::BadRequest(
+                "retiring the final resource would create an empty store".into(),
+            ));
+        }
+        let affected = std::collections::BTreeSet::from([retired.shard]);
+        let manifest = current.rebuild_changed_shards(&affected, &HashMap::new(), Some(key))?;
+        publish_manifest(root, &manifest)?;
+        let store = Self::open(root)?;
+        Ok((
+            store,
+            RetireStats {
+                generation: manifest.generation,
+                postings_removed: retired.postings,
+            },
+        ))
     }
 
     pub fn open(root: &Path) -> Result<Self> {
@@ -264,6 +426,55 @@ impl Store {
             shard.lookup_range(start, stop, &mut hits)?;
         }
         Ok(hits)
+    }
+
+    fn rebuild_changed_shards(
+        &self,
+        affected: &std::collections::BTreeSet<u32>,
+        changes: &HashMap<String, (u32, DumpResource)>,
+        retired_key: Option<&str>,
+    ) -> Result<Manifest> {
+        let mut manifest = self.manifest.clone();
+        manifest.resources.retain(|resource| {
+            Some(resource.key.as_str()) != retired_key && !changes.contains_key(&resource.key)
+        });
+        for &number in affected {
+            let mut group = Vec::new();
+            for resource in &self.manifest.resources {
+                if resource.shard == number
+                    && Some(resource.key.as_str()) != retired_key
+                    && !changes.contains_key(&resource.key)
+                {
+                    group.push((resource.id, self.dump_resource(resource)?));
+                }
+            }
+            for (id, resource) in changes.values() {
+                if shard_for_key(&resource.meta.key) == number {
+                    group.push((*id, resource.clone()));
+                }
+            }
+            group.sort_by(|a, b| a.1.meta.key.cmp(&b.1.meta.key));
+            let (shard, mut infos) = write_shard(&self.root, number, group)?;
+            manifest.shards[number as usize] = shard;
+            manifest.resources.append(&mut infos);
+        }
+        manifest.resources.sort_by_key(|resource| resource.id);
+        manifest.generation = generation_id_from_infos(&manifest.resources);
+        Ok(manifest)
+    }
+
+    fn dump_resource(&self, resource: &ResourceInfo) -> Result<DumpResource> {
+        let prints = self.forward(&resource.key, None)?;
+        Ok(DumpResource {
+            meta: crate::ResourceMeta {
+                source_id: resource.id.to_string(),
+                key: resource.key.clone(),
+                duration: resource.duration,
+                declared_prints: resource.postings,
+            },
+            prints,
+            prints_path: PathBuf::new(),
+        })
     }
 }
 
@@ -533,6 +744,10 @@ fn write_shard_file(
 }
 
 fn publish_manifest(root: &Path, manifest: &Manifest) -> Result<()> {
+    let previous = fs::read_to_string(root.join("CURRENT"))
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     let name = format!("{}.json", manifest.generation);
     let path = root.join("generations").join(&name);
     let temp_manifest = root
@@ -548,7 +763,37 @@ fn publish_manifest(root: &Path, manifest: &Manifest) -> Result<()> {
     fs::rename(&current_temp, root.join("CURRENT"))
         .map_err(|source| Error::io(root.join("CURRENT"), source))?;
     sync_directory(root)?;
+    garbage_collect(root, &name, previous.as_deref());
     Ok(())
+}
+
+fn garbage_collect(root: &Path, current: &str, previous: Option<&str>) {
+    let retained: std::collections::HashSet<_> =
+        [Some(current), previous].into_iter().flatten().collect();
+    let mut referenced_shards = std::collections::HashSet::new();
+    for manifest_name in &retained {
+        let path = root.join("generations").join(manifest_name);
+        if let Ok(bytes) = fs::read(&path)
+            && let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes)
+        {
+            referenced_shards.extend(manifest.shards.into_iter().map(|shard| shard.file));
+        }
+    }
+    if let Ok(entries) = fs::read_dir(root.join("generations")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !retained.contains(name.to_string_lossy().as_ref()) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(root.join("shards")) {
+        for entry in entries.flatten() {
+            if !referenced_shards.contains(entry.file_name().to_string_lossy().as_ref()) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -565,15 +810,14 @@ fn sync_directory(path: &Path) -> Result<()> {
         .map_err(|source| Error::io(path, source))
 }
 
-fn generation_id(resources: &[DumpResource]) -> String {
+fn generation_id_from_infos(resources: &[ResourceInfo]) -> String {
     let mut digest = Sha256::new();
     digest.update(config_id());
     for resource in resources {
-        digest.update(resource.meta.key.as_bytes());
-        digest.update(resource.meta.duration.to_le_bytes());
-        let mut prints = resource.prints.clone();
-        prints.sort_by_key(|print| (print.t, print.hash, print.f));
-        digest.update(fingerprint_content_hash(&prints, resource.meta.duration));
+        digest.update(resource.id.to_le_bytes());
+        digest.update(resource.key.as_bytes());
+        digest.update(resource.duration.to_le_bytes());
+        digest.update(resource.content_hash.as_bytes());
     }
     hex::encode(digest.finalize())[..24].to_owned()
 }
@@ -699,5 +943,26 @@ mod tests {
             Store::open(&root.path().join("absent")),
             Err(Error::StoreMissing(_))
         ));
+    }
+
+    #[test]
+    fn ingest_is_idempotent_and_retire_removes_real_postings() {
+        let root = tempfile::tempdir().unwrap();
+        Store::build(
+            root.path(),
+            vec![resource("a", &[(10, 1, 2)]), resource("b", &[(20, 3, 4)])],
+        )
+        .unwrap();
+        let (store, unchanged) =
+            Store::ingest(root.path(), vec![resource("a", &[(10, 1, 2)])], false).unwrap();
+        assert_eq!(unchanged.resources_unchanged, 1);
+        assert_eq!(unchanged.postings_added, 0);
+        assert_eq!(store.stats().postings, 2);
+
+        let (store, retired) = Store::retire(root.path(), "a").unwrap();
+        assert_eq!(retired.postings_removed, 1);
+        assert_eq!(store.stats().postings, 1);
+        assert!(matches!(store.resource("a"), Err(Error::BadRequest(_))));
+        assert!(store.lookup(10).unwrap().is_empty());
     }
 }
