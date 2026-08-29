@@ -43,3 +43,11 @@ when requested.
 Compatibility-specific behavior—duplicate probe hashes, Java float arithmetic, and Java
 `HashMap` tie iteration—is contained in this module. Store ordering and public result ordering
 remain deterministic and independent of those quirks.
+
+## Store-to-store queries
+
+`span` and `crosscheck` read A from the forward order and divide long ranges into independent
+30-second evidence regions. Each region uses the same voter; no adjacent results are merged.
+`crosscheck` queries all targets once per region, in parallel, then groups stable raw segments
+by reference. A full 7,500-second fixture resource crosschecks the 3.2M-posting store in about
+0.5 seconds on the development Mac.

@@ -1,0 +1,186 @@
+use std::collections::{BTreeMap, HashSet};
+
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::config::{TIME_BIN_SECONDS, seconds_to_bin};
+use crate::{Error, Evidence, Matcher, Result, Store};
+
+const REGION_SECONDS: f64 = 30.0;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Segment {
+    pub a_start: f64,
+    pub a_stop: f64,
+    pub b_start: f64,
+    pub b_stop: f64,
+    pub score: usize,
+    pub time_factor: f64,
+    pub pitch_factor: f64,
+    pub sec_with_match: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Evidence>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrosscheckMatch {
+    pub ref_key: String,
+    pub segments: Vec<Segment>,
+    pub score_total: usize,
+}
+
+pub fn span(
+    store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    b_key: &str,
+    evidence: bool,
+) -> Result<Vec<Segment>> {
+    store.resource(b_key)?;
+    let regions = region_prints(store, a_key, a_window)?;
+    let matcher = Matcher::new(store);
+    let candidates: Vec<_> = regions
+        .par_iter()
+        .map(|prints| matcher.match_resource(prints, b_key, evidence))
+        .collect();
+    let mut segments = Vec::new();
+    for candidate in candidates {
+        if let Some(row) = candidate? {
+            segments.push(row.into());
+        }
+    }
+    stable_segments(&mut segments);
+    Ok(segments)
+}
+
+pub fn crosscheck(
+    store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    targets: Option<&[String]>,
+    k: usize,
+    evidence: bool,
+) -> Result<Vec<CrosscheckMatch>> {
+    if k == 0 {
+        return Err(Error::BadRequest("k must be greater than zero".into()));
+    }
+    let target_ids = if let Some(keys) = targets {
+        let mut ids = HashSet::new();
+        for key in keys {
+            ids.insert(store.resource(key)?.id);
+        }
+        Some(ids)
+    } else {
+        None
+    };
+    let regions = region_prints(store, a_key, a_window)?;
+    let matcher = Matcher::new(store);
+    let rows: Vec<_> = regions
+        .par_iter()
+        .map(|prints| matcher.match_prints(prints, store.resources().len().max(1), evidence))
+        .collect();
+    let mut by_key = BTreeMap::<String, Vec<Segment>>::new();
+    for rows in rows {
+        for row in rows? {
+            let resource = store.resource(&row.ref_key)?;
+            if target_ids
+                .as_ref()
+                .is_some_and(|ids| !ids.contains(&resource.id))
+            {
+                continue;
+            }
+            by_key
+                .entry(row.ref_key.clone())
+                .or_default()
+                .push(row.into());
+        }
+    }
+    let mut matches: Vec<_> = by_key
+        .into_iter()
+        .map(|(ref_key, mut segments)| {
+            stable_segments(&mut segments);
+            CrosscheckMatch {
+                ref_key,
+                score_total: segments.iter().map(|segment| segment.score).sum(),
+                segments,
+            }
+        })
+        .collect();
+    matches.sort_by(|a, b| {
+        b.score_total
+            .cmp(&a.score_total)
+            .then_with(|| a.ref_key.cmp(&b.ref_key))
+    });
+    matches.truncate(k);
+    Ok(matches)
+}
+
+fn region_prints(
+    store: &Store,
+    key: &str,
+    window: Option<(f64, f64)>,
+) -> Result<Vec<Vec<crate::Fingerprint>>> {
+    let resource = store.resource(key)?;
+    let natural_stop = resource.t_max.saturating_add(1);
+    let (start, stop) = if let Some((start, stop)) = window {
+        if !start.is_finite() || !stop.is_finite() || start < 0.0 || start >= stop {
+            return Err(Error::BadRequest(
+                "a_window must contain finite, non-negative increasing seconds".into(),
+            ));
+        }
+        (
+            seconds_to_bin(start).unwrap_or(0),
+            seconds_to_bin(stop).unwrap_or(u32::MAX),
+        )
+    } else {
+        (resource.t_min, natural_stop)
+    };
+    let stop = stop.min(natural_stop);
+    if start >= stop {
+        return Err(Error::BadRequest(format!(
+            "window contains no stored time range for {key:?}"
+        )));
+    }
+    let region_bins = (REGION_SECONDS / TIME_BIN_SECONDS) as u32;
+    let mut regions = Vec::new();
+    let mut cursor = start;
+    while cursor < stop {
+        let region_stop = cursor.saturating_add(region_bins).min(stop);
+        let prints = store.forward(key, Some((cursor, region_stop)))?;
+        if !prints.is_empty() {
+            regions.push(prints);
+        }
+        cursor = region_stop;
+    }
+    if regions.is_empty() {
+        return Err(Error::BadRequest(format!(
+            "window contains no fingerprints for {key:?}"
+        )));
+    }
+    Ok(regions)
+}
+
+fn stable_segments(segments: &mut [Segment]) {
+    segments.sort_by(|a, b| {
+        a.a_start
+            .total_cmp(&b.a_start)
+            .then_with(|| a.b_start.total_cmp(&b.b_start))
+            .then_with(|| b.score.cmp(&a.score))
+    });
+}
+
+impl From<crate::MatchRow> for Segment {
+    fn from(row: crate::MatchRow) -> Self {
+        Self {
+            a_start: row.q_start,
+            a_stop: row.q_stop,
+            b_start: row.ref_start,
+            b_stop: row.ref_stop,
+            score: row.score,
+            time_factor: row.time_factor,
+            pitch_factor: row.pitch_factor,
+            sec_with_match: row.sec_with_match,
+            evidence: row.evidence,
+        }
+    }
+}

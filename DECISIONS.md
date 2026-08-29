@@ -58,3 +58,15 @@ bucket order. Probe hash duplicates also retain Panako's observed queue/map beha
 These are oracle-compatibility details, not general store semantics. A future voter need not
 inherit them. Result ordering is explicitly score-descending then caller key, improving on
 the jar's unspecified equal-score order.
+
+## 2026-08-28 — make long store comparisons a series of raw 30-second regions
+
+One Panako line fit across a two-hour resource can select only one offset and miss disjoint
+shared material. Evaluate non-overlapping 30-second regions independently, return every
+passing segment, and do not merge adjacent segments. Thirty seconds provides substantially
+more evidence than the five-second minimum while keeping local changes in time/pitch factor
+from poisoning an entire recording. `crosscheck` fans each region across the store in one
+batched matcher call rather than making one call per target.
+
+This is a conservative v0 region definition, not a claim that 30 seconds is intrinsically
+correct. Adaptive hit-cloud segmentation is recorded in REPORT.md as a capability opportunity.
