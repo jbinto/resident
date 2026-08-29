@@ -11,6 +11,19 @@ integer transform bins and converted to seconds only at an API edge. Fingerprint
 plain fact tuple `(hash: u64, t: u32, f: u16)`; Panako resource ids are import metadata, not
 engine identity.
 
+## Code map
+
+| module | responsibility |
+|---|---|
+| `core/src/config.rs`, `fingerprint.rs`, `dump.rs` | pinned domain, conversions, dump grammar |
+| `core/src/store.rs`, `mmap_view.rs` | generations, shards, forward/inverted access |
+| `core/src/matcher.rs`, `span.rs` | oracle voter, evidence, one/cross-store questions |
+| `core/src/extract.rs` | bounded native audio analysis and ordered print emission |
+| `resident/src/daemon.rs` | concurrent typed JSON-lines process edge |
+| `resident/src/refingerprint.rs` | resumable parallel corpus dump production |
+| `resident/src/ab_compare.rs` | cutover agreement reports and evidence |
+| `resident/src/verify.rs`, `extract_verify.rs` | fixture acceptance commands |
+
 ## Store
 
 A store root contains `CURRENT`, immutable JSON generation manifests in `generations/`, and

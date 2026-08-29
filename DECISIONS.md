@@ -202,3 +202,17 @@ The fixture proof sorts the 16 resources, partitions alternating entries into tw
 eight-resource stores, and selects `1236 → 0789` across the split. Cross-store span over the
 real 184–196 second pair window returns one segment exactly equal to the full single-store
 answer.
+
+## 2026-08-29 — gate cutover on behavior and preserve rollback
+
+Do not equate a complete native corpus run with permission to cut over. Matcher compatibility
+is exact, but native extraction recovers 42/44 expected fixture references and therefore
+creates a meaningfully different store. The jar-derived generation remains the rollback and A
+side until a representative pilot and then the full native generation pass an explicit
+reference-set/span/score policy using `ab-compare`.
+
+Per-file decode failures intentionally leave the batch process successful so thousands of
+other resources can finish. Operational automation must inspect the JSON summary and require
+`failed == 0`; this is recorded prominently in `REPORT.md` rather than hidden behind an
+exit-code convention. No production throughput, RSS, or 412M-posting ingest claim is made
+without measuring the target server.

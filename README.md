@@ -10,8 +10,9 @@ in the loop. Validated behaviorally against the original jar via golden fixtures
 
 ## Building it / working here
 
-Start with `HANDOFF.md` (the build brief), then `SPEC.md` → `docs/ENGINE-FACTS.md` →
-`CONTRACT.md` → `AGENTS.md`. Fixtures: `fixtures/README.md`. Gate: `./check.sh`.
+At handover, read `REPORT.md` first. For original intent and constraints, continue with
+`HANDOFF.md` → `SPEC.md` → `docs/ENGINE-FACTS.md` → `CONTRACT.md` → `AGENTS.md`.
+Fixtures: `fixtures/README.md`. Gate: `./check.sh`.
 
 The workspace requires stable Rust and ffmpeg. Run `./check.sh` for the complete local gate.
 
