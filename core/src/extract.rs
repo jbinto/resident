@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use rayon::prelude::*;
@@ -24,6 +26,10 @@ const MIN_FREQUENCY_DISTANCE: u16 = 1;
 const MAX_FREQUENCY_DISTANCE: u16 = 128;
 const GABORATOR_MAX_ERROR: f64 = 1e-5;
 const GABORATOR_ANALYSIS_SUPPORT: usize = 12_469;
+// Twelve seconds at 16 kHz is deliberately one chunk so the fixture-proven transform remains
+// unchanged. Longer inputs pay a fixed memory cost and retain this much context on each side.
+const STREAM_CORE_SAMPLES: usize = 24 * AUDIO_BLOCK;
+const STREAM_FFT_SIZE: usize = 1 << 18;
 
 struct AnalysisSpectrum {
     bins: Vec<Complex32>,
@@ -45,7 +51,64 @@ struct EventPoint {
 }
 
 pub fn extract_audio(path: &Path) -> Result<Extraction> {
-    let output = Command::new("ffmpeg")
+    let mut prints = Vec::new();
+    let duration = extract_audio_streaming(path, |print| prints.push(print))?;
+    Ok(Extraction { prints, duration })
+}
+
+/// Decode with bounded RAM and emit fingerprints in canonical extraction order.
+pub fn extract_audio_streaming(path: &Path, mut emit: impl FnMut(Fingerprint)) -> Result<f64> {
+    let mut child = ffmpeg_command(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            Error::BadRequest(format!("start ffmpeg for {}: {error}", path.display()))
+        })?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::Internal("ffmpeg stdout was not piped".into()))?;
+    let mut spool =
+        tempfile::tempfile().map_err(|error| Error::io("temporary PCM spool", error))?;
+    let byte_count = std::io::copy(&mut stdout, &mut spool)
+        .map_err(|error| Error::io("temporary PCM spool", error))?;
+    let output = child.wait_with_output().map_err(|error| {
+        Error::BadRequest(format!(
+            "wait for ffmpeg decoding {}: {error}",
+            path.display()
+        ))
+    })?;
+    validate_ffmpeg_output(path, output.status.success(), &output.stderr, byte_count)?;
+    extract_pcm(&mut spool, byte_count / 2, &mut emit)
+}
+
+/// Whole-file decode used only as an independent validation seam for the streaming path.
+pub fn extract_audio_whole(path: &Path) -> Result<Extraction> {
+    let output = ffmpeg_command(path).output().map_err(|error| {
+        Error::BadRequest(format!("start ffmpeg for {}: {error}", path.display()))
+    })?;
+    validate_ffmpeg_output(
+        path,
+        output.status.success(),
+        &output.stderr,
+        output.stdout.len() as u64,
+    )?;
+    let samples: Vec<f32> = output
+        .stdout
+        .chunks_exact(2)
+        .map(|chunk| {
+            f32::from(i16::from_le_bytes(
+                chunk.try_into().expect("two-byte chunk"),
+            )) / 32_768.0
+        })
+        .collect();
+    Ok(extract_samples(&samples))
+}
+
+fn ffmpeg_command(path: &Path) -> Command {
+    let mut command = Command::new("ffmpeg");
+    command
         .arg("-nostdin")
         .arg("-v")
         .arg("error")
@@ -60,69 +123,137 @@ pub fn extract_audio(path: &Path) -> Result<Extraction> {
         .arg("pcm_s16le")
         .arg("-f")
         .arg("s16le")
-        .arg("pipe:1")
-        .output()
-        .map_err(|error| {
-            Error::BadRequest(format!("start ffmpeg for {}: {error}", path.display()))
-        })?;
-    if !output.status.success() {
+        .arg("pipe:1");
+    command
+}
+
+fn validate_ffmpeg_output(path: &Path, success: bool, stderr: &[u8], bytes: u64) -> Result<()> {
+    if !success {
         return Err(Error::BadRequest(format!(
             "ffmpeg could not decode {}: {}",
             path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(stderr).trim()
         )));
     }
-    if output.stdout.len() % 2 != 0 {
+    if !bytes.is_multiple_of(2) {
         return Err(Error::Internal(
             "ffmpeg returned a partial s16 sample".into(),
         ));
     }
-    let samples: Vec<f32> = output
-        .stdout
-        .chunks_exact(2)
-        .map(|chunk| {
-            f32::from(i16::from_le_bytes(
-                chunk.try_into().expect("two-byte chunk"),
-            )) / 32_768.0
-        })
-        .collect();
-    Ok(extract_samples(&samples))
+    Ok(())
+}
+
+fn extract_pcm(
+    file: &mut File,
+    sample_count: u64,
+    emit: &mut impl FnMut(Fingerprint),
+) -> Result<f64> {
+    let sample_count = usize::try_from(sample_count)
+        .map_err(|_| Error::Unsupported("decoded audio exceeds addressable sample count".into()))?;
+    extract_chunks(
+        sample_count,
+        |start, stop| {
+            let byte_start = u64::try_from(start)
+                .ok()
+                .and_then(|value| value.checked_mul(2))
+                .ok_or_else(|| Error::Internal("PCM byte offset overflow".into()))?;
+            file.seek(SeekFrom::Start(byte_start))
+                .map_err(|error| Error::io("temporary PCM spool", error))?;
+            let mut bytes = vec![0_u8; (stop - start) * 2];
+            file.read_exact(&mut bytes)
+                .map_err(|error| Error::io("temporary PCM spool", error))?;
+            Ok(bytes
+                .chunks_exact(2)
+                .map(|chunk| {
+                    f32::from(i16::from_le_bytes(
+                        chunk.try_into().expect("two-byte chunk"),
+                    )) / 32_768.0
+                })
+                .collect())
+        },
+        emit,
+    )
 }
 
 pub fn extract_samples(samples: &[f32]) -> Extraction {
-    let duration = samples.len() as f64 / f64::from(SAMPLE_RATE);
-    if samples.len() < HOP * TIME_FILTER {
-        return Extraction {
-            prints: Vec::new(),
-            duration,
-        };
+    let mut prints = Vec::new();
+    let duration = extract_chunks(
+        samples.len(),
+        |start, stop| Ok(samples[start..stop].to_vec()),
+        &mut |print| prints.push(print),
+    )
+    .expect("slice ranges are valid");
+    Extraction { prints, duration }
+}
+
+fn extract_chunks(
+    sample_count: usize,
+    mut read_samples: impl FnMut(usize, usize) -> Result<Vec<f32>>,
+    emit: &mut impl FnMut(Fingerprint),
+) -> Result<f64> {
+    let duration = sample_count as f64 / f64::from(SAMPLE_RATE);
+    if sample_count < HOP * TIME_FILTER {
+        return Ok(duration);
     }
-    let padded_samples = samples.len().div_ceil(AUDIO_BLOCK) * AUDIO_BLOCK;
+    let padded_samples = sample_count.div_ceil(AUDIO_BLOCK) * AUDIO_BLOCK;
     let ring_frames = (GABORATOR_ANALYSIS_SUPPORT + 2 * AUDIO_BLOCK) / HOP;
     let available_frames = padded_samples.saturating_sub(GABORATOR_ANALYSIS_SUPPORT + 1) / HOP;
     let frames = available_frames.saturating_sub(ring_frames);
     if frames < TIME_FILTER {
-        return Extraction {
-            prints: Vec::new(),
-            duration,
+        return Ok(duration);
+    }
+    let mut stream = EventStream::default();
+    for core_start in (0..sample_count).step_by(STREAM_CORE_SAMPLES) {
+        let core_stop = (core_start + STREAM_CORE_SAMPLES).min(sample_count);
+        let input_start = core_start.saturating_sub(GABORATOR_ANALYSIS_SUPPORT);
+        let input_stop = (core_stop + GABORATOR_ANALYSIS_SUPPORT).min(sample_count);
+        let samples = read_samples(input_start, input_stop)?;
+        if samples.len() != input_stop - input_start {
+            return Err(Error::Internal(
+                "sample source returned a short range".into(),
+            ));
+        }
+        let spectrum = analysis_spectrum(&samples);
+        let output_start = if core_start == 0 {
+            0
+        } else {
+            core_start / HOP - 1
         };
+        let output_stop = if core_stop == sample_count {
+            frames
+        } else {
+            (core_stop / HOP - 1).min(frames)
+        };
+        if output_start >= output_stop {
+            continue;
+        }
+        let by_band: Vec<Vec<f32>> = (0..BAND_COUNT)
+            .into_par_iter()
+            .map(|band| {
+                band_magnitudes(
+                    &spectrum,
+                    samples.len(),
+                    input_start,
+                    output_start,
+                    output_stop,
+                    band,
+                )
+            })
+            .collect();
+        stream.push(&by_band, emit);
     }
-    let spectrum = analysis_spectrum(samples);
-    let by_band: Vec<Vec<f32>> = (0..BAND_COUNT)
-        .into_par_iter()
-        .map(|band| band_magnitudes(&spectrum, samples.len(), frames, band))
-        .collect();
-    let events = event_points(&by_band, frames);
+    let event_count = stream.event_count;
+    stream.finish(emit);
     if std::env::var_os("RESIDENT_EXTRACT_DEBUG").is_some() {
-        eprintln!("extract frames={frames} events={}", events.len());
+        eprintln!("extract frames={frames} events={event_count}");
     }
-    let prints = pack_event_points(&events);
-    Extraction { prints, duration }
+    Ok(duration)
 }
 
 fn analysis_spectrum(samples: &[f32]) -> AnalysisSpectrum {
-    let fft_size =
-        (samples.len() + 2 * crate::config::TRANSFORM_LATENCY_SAMPLES as usize).next_power_of_two();
+    let fft_size = (samples.len() + 2 * crate::config::TRANSFORM_LATENCY_SAMPLES as usize)
+        .next_power_of_two()
+        .max(STREAM_FFT_SIZE);
     let mut bins = vec![Complex32::zero(); fft_size];
     for (output, &sample) in bins.iter_mut().zip(samples) {
         output.re = sample;
@@ -141,7 +272,9 @@ fn analysis_spectrum(samples: &[f32]) -> AnalysisSpectrum {
 fn band_magnitudes(
     spectrum: &AnalysisSpectrum,
     sample_count: usize,
-    frames: usize,
+    input_start: usize,
+    output_start: usize,
+    output_stop: usize,
     band: usize,
 ) -> Vec<f32> {
     // Gaborator numbers bands from high to low; JGaborator subtracts the first retained
@@ -175,17 +308,141 @@ fn band_magnitudes(
         scaled_support *= 2.0;
         native_step *= 2;
     }
-    let mut magnitudes = vec![0.0_f32; frames];
-    for sample in (native_step..sample_count).step_by(native_step) {
+    let mut magnitudes = vec![0.0_f32; output_stop - output_start];
+    let input_stop = input_start + sample_count;
+    let first_sample = input_start
+        .div_ceil(native_step)
+        .max(1)
+        .saturating_mul(native_step);
+    for sample in (first_sample..input_stop).step_by(native_step) {
         let frame = sample / HOP;
-        if frame > 0 && frame <= frames {
-            let magnitude = filtered[sample].norm();
-            magnitudes[frame - 1] = magnitudes[frame - 1].max(magnitude);
+        if frame > 0 {
+            let output = frame - 1;
+            if (output_start..output_stop).contains(&output) {
+                let magnitude = filtered[sample - input_start].norm();
+                let slot = &mut magnitudes[output - output_start];
+                *slot = slot.max(magnitude);
+            }
         }
     }
     magnitudes
 }
 
+#[derive(Default)]
+struct EventStream {
+    magnitudes: VecDeque<Vec<f32>>,
+    vertical: VecDeque<Vec<f32>>,
+    packer: EventPacker,
+    frame_count: u32,
+    event_count: usize,
+}
+
+impl EventStream {
+    fn push(&mut self, by_band: &[Vec<f32>], emit: &mut impl FnMut(Fingerprint)) {
+        let frames = by_band.first().map_or(0, Vec::len);
+        debug_assert!(by_band.iter().all(|band| band.len() == frames));
+        for time in 0..frames {
+            let row: Vec<f32> = by_band.iter().map(|band| band[time]).collect();
+            self.vertical.push_back(lemire_vertical_max_row(&row));
+            self.magnitudes.push_back(row);
+            let newest = self.frame_count;
+            self.frame_count += 1;
+            if self.magnitudes.len() < TIME_FILTER {
+                continue;
+            }
+            let center = TIME_FILTER / 2;
+            let event_time = newest - center as u32;
+            for frequency in 2..BAND_COUNT - 1 {
+                let value = self.magnitudes[center][frequency];
+                if value == 0.0 || self.vertical[center][frequency] != value {
+                    continue;
+                }
+                // Panako excludes the upper endpoint despite retaining a 25-frame cache.
+                if self
+                    .vertical
+                    .iter()
+                    .take(TIME_FILTER - 1)
+                    .any(|row| row[frequency] > value)
+                {
+                    continue;
+                }
+                let mut magnitude = 0.0;
+                for row in self.magnitudes.iter().skip(center - 1).take(3) {
+                    magnitude += row[frequency - 1..=frequency + 1].iter().sum::<f32>();
+                }
+                self.packer.push(EventPoint {
+                    t: event_time,
+                    f: frequency as u16,
+                    magnitude,
+                });
+                self.event_count += 1;
+            }
+            self.packer.advance(event_time, emit);
+            self.vertical.pop_front();
+            self.magnitudes.pop_front();
+        }
+    }
+
+    fn finish(self, emit: &mut impl FnMut(Fingerprint)) {
+        self.packer.finish(emit);
+    }
+}
+
+#[derive(Default)]
+struct EventPacker {
+    events: VecDeque<EventPoint>,
+}
+
+impl EventPacker {
+    fn push(&mut self, event: EventPoint) {
+        self.events.push_back(event);
+    }
+
+    fn advance(&mut self, time: u32, emit: &mut impl FnMut(Fingerprint)) {
+        while self
+            .events
+            .front()
+            .is_some_and(|first| time > first.t + 2 * MAX_TIME_DISTANCE)
+        {
+            self.pack_first(emit);
+        }
+    }
+
+    fn pack_first(&mut self, emit: &mut impl FnMut(Fingerprint)) {
+        let first = self.events.pop_front().expect("nonempty event window");
+        for (second_index, second) in self.events.iter().enumerate() {
+            let dt = second.t - first.t;
+            if dt > MAX_TIME_DISTANCE {
+                break;
+            }
+            if dt < MIN_TIME_DISTANCE || !frequency_distance(first.f, second.f) {
+                continue;
+            }
+            for third in self.events.iter().skip(second_index + 1) {
+                let dt = third.t - second.t;
+                if dt > MAX_TIME_DISTANCE {
+                    break;
+                }
+                if dt < MIN_TIME_DISTANCE || !frequency_distance(second.f, third.f) {
+                    continue;
+                }
+                emit(Fingerprint::new(
+                    landmark_hash(first, *second, *third),
+                    first.t,
+                    first.f,
+                ));
+            }
+        }
+    }
+
+    fn finish(mut self, emit: &mut impl FnMut(Fingerprint)) {
+        while !self.events.is_empty() {
+            self.pack_first(emit);
+        }
+    }
+}
+
+#[cfg(test)]
 fn event_points(by_band: &[Vec<f32>], frames: usize) -> Vec<EventPoint> {
     let time_radius = TIME_FILTER / 2;
     let vertical: Vec<Vec<f32>> = (0..frames)
@@ -221,7 +478,14 @@ fn event_points(by_band: &[Vec<f32>], frames: usize) -> Vec<EventPoint> {
     events
 }
 
+#[cfg(test)]
 fn lemire_vertical_max(by_band: &[Vec<f32>], time: usize) -> Vec<f32> {
+    let row: Vec<f32> = by_band.iter().map(|band| band[time]).collect();
+    lemire_vertical_max_row(&row)
+}
+
+fn lemire_vertical_max_row(row: &[f32]) -> Vec<f32> {
+    debug_assert_eq!(row.len(), BAND_COUNT);
     let radius = FREQUENCY_FILTER / 2;
     // Panako constructs this filter for AUDIO_BLOCK/2 values, then passes a 510-value
     // Gaborator row. The untouched middle is zero and the right edge clamp lands far past
@@ -229,9 +493,9 @@ fn lemire_vertical_max(by_band: &[Vec<f32>], time: usize) -> Vec<f32> {
     let relevant_length = radius + BAND_COUNT + radius;
     debug_assert!(relevant_length < MAX_FILTER_DATA_LENGTH + FREQUENCY_FILTER - 1);
     let mut padded = vec![0.0_f32; relevant_length];
-    padded[..radius].fill(by_band[0][time]);
+    padded[..radius].fill(row[0]);
     for (frequency, value) in padded[radius..radius + BAND_COUNT].iter_mut().enumerate() {
-        *value = by_band[frequency][time];
+        *value = row[frequency];
     }
 
     let mut maximum = vec![0.0_f32; BAND_COUNT];
@@ -267,36 +531,6 @@ fn lemire_vertical_max(by_band: &[Vec<f32>], time: usize) -> Vec<f32> {
     }
     maximum[BAND_COUNT - 1] = padded[*fifo.front().expect("nonempty maximum deque")];
     maximum
-}
-
-fn pack_event_points(events: &[EventPoint]) -> Vec<Fingerprint> {
-    let mut prints = Vec::new();
-    for (i, first) in events.iter().enumerate() {
-        for (j, second) in events.iter().enumerate().skip(i + 1) {
-            let dt = second.t - first.t;
-            if dt > MAX_TIME_DISTANCE {
-                break;
-            }
-            if dt < MIN_TIME_DISTANCE || !frequency_distance(first.f, second.f) {
-                continue;
-            }
-            for third in events.iter().skip(j + 1) {
-                let dt = third.t - second.t;
-                if dt > MAX_TIME_DISTANCE {
-                    break;
-                }
-                if dt < MIN_TIME_DISTANCE || !frequency_distance(second.f, third.f) {
-                    continue;
-                }
-                prints.push(Fingerprint::new(
-                    landmark_hash(*first, *second, *third),
-                    first.t,
-                    first.f,
-                ));
-            }
-        }
-    }
-    prints
 }
 
 fn frequency_distance(a: u16, b: u16) -> bool {

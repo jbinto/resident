@@ -106,3 +106,19 @@ Fixture validation is the acceptance boundary: exact event anchors agree at 97.3
 98.0% precision, while exact packed prints reach 87.8%/88.6% and recover 42/44 expected match
 references. This satisfies the SPEC's non-bit-exact extraction lane honestly without making
 native prints part of the already-exact matcher oracle claim.
+
+## 2026-08-28 — bound extraction with fixed cores and an ordered print sink
+
+Use 196,608-sample analysis cores, the fixture-proven 262,144-point FFT, and 12,469 samples of
+Gaborator scheduling context on both sides. A core is exactly the decoded length of each
+delivered 12-second window, so this change leaves the established extraction measurements
+unchanged. The event and triplet stages retain only their required 25- and 66-frame windows;
+the public streaming seam emits completed prints immediately in the same order as collection.
+
+ffmpeg first writes signed PCM into an auto-deleting disk spool. This makes RAM independent of
+track duration while providing the known sample count needed for exact wrapper tail behavior.
+It intentionally trades temporary disk and a second PCM pass for a simple, testable flush
+boundary on the 50 TB deployment target. `validate-stream` requires fingerprint-vector and
+duration equality for all 22 fixture windows and for a stitched 36-second input that crosses
+an internal core boundary. The existing extraction validation remains 87.8%/88.6%, 97.3%/
+98.0% anchors, and 42/44 references.

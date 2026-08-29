@@ -23,10 +23,13 @@ cargo run --release -- verify fixtures --store ./resident-store
 cargo run --release -- daemon --store ./resident-store
 cargo run --release -- extract ./audio.wav
 cargo run --release -- validate-extract fixtures --store ./resident-store
+cargo run --release -- validate-stream fixtures
 ```
 
 The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
 `enroll`. Extraction requires ffmpeg at runtime but has no JVM, JNI, or Gaborator dependency.
+Its core memory is bounded for multi-hour inputs; `validate-stream` proves exact streamed output
+on every real query window and on a stitched boundary/flush fixture.
 See `REPORT.md` for matcher parity, extraction fidelity, scale measurements, and the explicit
 performance/capability opportunity ledger.
 

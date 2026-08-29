@@ -91,6 +91,8 @@ enum Command {
         #[arg(long)]
         store: Option<PathBuf>,
     },
+    /// Prove bounded-memory extraction is identical to whole-file decoding.
+    ValidateStream { fixtures: PathBuf },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -171,6 +173,7 @@ fn main() -> anyhow::Result<()> {
         Command::ValidateExtract { fixtures, store } => {
             extract_verify::run(&fixtures, store.as_deref())?
         }
+        Command::ValidateStream { fixtures } => extract_verify::run_stream(&fixtures)?,
     }
     Ok(())
 }

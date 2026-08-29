@@ -16,7 +16,8 @@ out wrong, the engine says so loudly instead of approximating.
 - **Extraction** (SPEC §extraction — built AFTER matcher parity is green): decode/resample
   front (ffmpeg subprocess or established crates) → log-frequency transform → event points →
   triplets → Panako's exact hash packing. Two-tier validation; bit-exactness ruled
-  not-required. This lane sheds the Java + Gaborator dependency entirely.
+  not-required. Bounded-memory chunk analysis and ordered print emission support multi-hour
+  inputs. This lane sheds the Java + Gaborator dependency entirely.
 
 ## Out (deliberately, v0) — asked-for = `unsupported` error, never approximation
 

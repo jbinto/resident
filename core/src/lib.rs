@@ -12,7 +12,9 @@ pub mod store;
 
 pub use dump::{DumpResource, ResourceMeta, load_dump_dir, load_prints};
 pub use error::{Error, Result};
-pub use extract::{Extraction, extract_audio, extract_samples};
+pub use extract::{
+    Extraction, extract_audio, extract_audio_streaming, extract_audio_whole, extract_samples,
+};
 pub use fingerprint::Fingerprint;
 pub use matcher::{Evidence, MatchRow, Matcher};
 pub use span::{CrosscheckMatch, Segment, crosscheck, span};

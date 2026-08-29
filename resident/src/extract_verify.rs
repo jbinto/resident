@@ -1,10 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use resident_core::{Fingerprint, Matcher, Store, extract_audio, load_dump_dir, load_prints};
+use resident_core::{
+    Fingerprint, Matcher, Store, extract_audio, extract_audio_whole, load_dump_dir, load_prints,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -96,6 +99,87 @@ pub(crate) fn run(fixtures: &Path, store_path: Option<&Path>) -> anyhow::Result<
         elapsed.as_secs_f64()
     );
     Ok(())
+}
+
+pub(crate) fn run_stream(fixtures: &Path) -> anyhow::Result<()> {
+    let queries = query_directories(fixtures)?;
+    for query in &queries {
+        let name = query.file_name().unwrap().to_string_lossy();
+        compare_streams(&query.join("window.wav"))?;
+        println!("{name:<20} stream=exact");
+    }
+
+    // The delivered windows are exactly one canonical extraction core. Stitch three real
+    // windows so this gate also crosses core boundaries and exercises final-window flushing.
+    let temporary = tempfile::tempdir().context("create stitched stream fixture")?;
+    let stitched = temporary.path().join("three-windows.wav");
+    let inputs: Vec<_> = queries
+        .iter()
+        .take(3)
+        .map(|query| query.join("window.wav"))
+        .collect();
+    anyhow::ensure!(
+        inputs.len() == 3,
+        "validate-stream needs at least three fixture windows"
+    );
+    let status = Command::new("ffmpeg")
+        .arg("-nostdin")
+        .arg("-v")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(&inputs[0])
+        .arg("-i")
+        .arg(&inputs[1])
+        .arg("-i")
+        .arg(&inputs[2])
+        .arg("-filter_complex")
+        .arg("[0:a][1:a][2:a]concat=n=3:v=0:a=1[out]")
+        .arg("-map")
+        .arg("[out]")
+        .arg("-c:a")
+        .arg("pcm_s16le")
+        .arg(&stitched)
+        .status()
+        .context("start ffmpeg for stitched stream fixture")?;
+    anyhow::ensure!(status.success(), "ffmpeg could not stitch stream fixture");
+    let prints = compare_streams(&stitched)?;
+    println!("stitched_3x12s       stream=exact prints={prints}");
+    println!(
+        "\nstream: {}/{} fixture windows exact; boundary/flush exact",
+        queries.len(),
+        queries.len()
+    );
+    Ok(())
+}
+
+fn query_directories(fixtures: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut queries: Vec<PathBuf> = fs::read_dir(fixtures.join("queries"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<_, _>>()?;
+    queries.retain(|path| path.is_dir());
+    queries.sort();
+    Ok(queries)
+}
+
+fn compare_streams(path: &Path) -> anyhow::Result<usize> {
+    let whole = extract_audio_whole(path)?;
+    let streamed = extract_audio(path)?;
+    anyhow::ensure!(
+        whole.duration.to_bits() == streamed.duration.to_bits(),
+        "stream duration differs for {}: whole={} stream={}",
+        path.display(),
+        whole.duration,
+        streamed.duration
+    );
+    anyhow::ensure!(
+        whole.prints == streamed.prints,
+        "stream fingerprints differ for {}: whole={} stream={}",
+        path.display(),
+        whole.prints.len(),
+        streamed.prints.len()
+    );
+    Ok(streamed.prints.len())
 }
 
 fn anchor_proximity_fraction(

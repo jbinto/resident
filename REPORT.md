@@ -14,6 +14,7 @@ This report is maintained during the build and finalized at handoff.
 | Decode mapped fixed records as validated typed slices | low–medium | explicit safe byte reads keep the format obvious; bounds checks remain in the hot loop |
 | Replace 510 full-rate inverse FFTs with Gaborator-style octave downsampling | high (roughly 4–8× extraction throughput) | the direct full-rate formulation made the compatibility transform small and auditable; a multirate rewrite needs its own fixture proof |
 | Cache FFT plans and worker scratch across extraction requests | medium | current extraction plans once per file and allocates one spectrum per band; correctness was established before pooling state |
+| Analyze directly behind ffmpeg with one-core lookahead instead of a PCM disk spool | low–medium latency and temporary-I/O reduction | the spool makes total length and exact tail flushing explicit while already bounding RAM; the 50 TB target makes the trade safe |
 
 ### B — performance available by departing from Panako answers
 
@@ -31,7 +32,6 @@ This report is maintained during the build and finalized at handoff.
 | Emit ranked secondary offset lines for DJ blends/doubles | additive wire capability; departs from jar's one-line deletion when enabled | high |
 | Adaptive hit-cloud region finding instead of fixed independent span regions | can preserve existing raw rows behind a new mode | medium–high for long recordings |
 | Re-fingerprint with an improved native transform/config after migration | intentionally creates a new config/store identity | high; ends legacy extraction constraints |
-| Bounded-memory streaming extraction for multi-hour inputs | compatible output if overlap and wrapper flush behavior are preserved | high operational capability; current whole-file FFT is intended for enrollment-sized inputs |
 | Correct the legacy 4096-vs-510 max-filter call-site quirk | incompatible fingerprint population, best introduced as a v1 config | medium quality/maintainability payoff; removes an accidental oracle constraint |
 
 ## Results
@@ -49,6 +49,10 @@ This report is maintained during the build and finalized at handoff.
 - The native extractor has no Gaborator/JNI/JVM dependency. It ports only the analysis
   behavior needed here: Gaussian log-frequency bands, native coefficient cadence, the legacy
   wrapper delay/max-filter behavior, event selection, and exact 34-bit triplet packing.
+- Extraction RAM is bounded by one overlapped 196,608-sample core plus parallel band work and
+  the 25/66-frame event windows. Prints can be consumed incrementally in canonical order.
+  `validate-stream` is exact on 22/22 real windows and a stitched 36-second boundary/flush
+  case; the established extraction and downstream-match measurements are unchanged.
 - `extract` and `enroll` are live in the concurrent daemon. Enrollment was exercised from an
   absent store through generation publication and immediate snapshot visibility.
 
