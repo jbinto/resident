@@ -15,6 +15,8 @@ out wrong, the engine says so loudly instead of approximating.
 - Opt-in ranked multi-line emission for `match`; absent/false retains jar single-line parity.
 - Resumable, bounded-parallel native re-fingerprinting from JSONL audio manifests to the
   Panako dump grammar, with deterministic failures and atomic per-resource completion.
+- A/B agreement reports for two store generations over external probes or stored-resource
+  windows, including row spans, score deltas, ranked divergences, and named evidence dumps.
 - Conversion layer: time bins↔seconds, freq bins↔Hz.
 - **Extraction** (SPEC §extraction — built AFTER matcher parity is green): decode/resample
   front (ffmpeg subprocess or established crates) → log-frequency transform → event points →

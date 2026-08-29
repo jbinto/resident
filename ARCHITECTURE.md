@@ -113,3 +113,17 @@ declared count before skipping a resource; an orphan partial or print file is ov
 Decode failures remain incomplete, are retried on restart, and are written in manifest order
 to an atomically replaced `failures.jsonl`. Progress is one stderr line per configured number
 of resources; the machine-readable exit summary is one JSON object on stdout.
+
+## Store agreement
+
+`resident ab-compare` opens and identifies two immutable store generations, then replays
+either external `.tdb` probes or named store-resource windows against each independently.
+One side's unknown source key is a reported question divergence; malformed probes and store
+integrity errors abort the run.
+
+For every reference row, the report records presence, query/reference span intersection-over-
+union, both scores, and signed B-minus-A score delta. A question agrees when reference sets are
+identical, both spans intersect for every row, and score deltas fit `--max-score-delta`
+(zero by default). All questions remain in the pretty JSON report; a severity-ranked shortlist
+puts missing rows and non-overlapping spans ahead of score drift. `--evidence NAME` reruns
+that named question with both complete evidence-bearing row sets embedded.

@@ -165,3 +165,22 @@ Use one Rayon pool of exactly `--jobs` threads for both file concurrency and nes
 This bounds simultaneous extraction state by the operator-selected worker count on the
 12-core target. The process-kill integration test publishes at least one resource, kills the
 process, resumes, and compares every final output byte with an uninterrupted run.
+
+## 2026-08-29 — define A/B agreement at the observable row boundary
+
+Compare stores by replaying the same external probe, or each store's corresponding named
+resource window, through the existing single-line matcher. A question agrees only when the
+reference-key sets are identical, every paired query and reference span has positive
+intersection, and absolute score delta is within an operator threshold (zero by default).
+Report span intersection-over-union and signed B-minus-A scores rather than hiding them behind
+the aggregate verdict.
+
+Pretty JSON is the durable report: it identifies both paths, generations, config ids, sizes,
+every question and row, plus a severity-ranked divergence shortlist. Missing rows dominate
+severity, then non-overlapping spans, then raw score drift. A named evidence option embeds both
+complete row sets. Unknown replay keys on one side are data-plane divergences; malformed probe
+input or store corruption still aborts.
+
+The fixture acceptance seam compares all 22 probe sets against the same store for 100%
+agreement. Rebuilding a second store and retiring `/corpus/wefunk/shows/0789/audio.m4a`
+produces exactly three missing rows for that key and zero changes to surviving rows.

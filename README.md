@@ -27,6 +27,8 @@ cargo run --release -- validate-stream fixtures
 cargo run --release -- validate-multiline fixtures --store ./resident-store
 cargo run --release -- refingerprint \
   --manifest ./corpus.jsonl --output-dir ./native-dump --jobs 12
+cargo run --release -- ab-compare \
+  --a-store ./jar-store --b-store ./native-store --probes-dir ./probes
 ```
 
 The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
@@ -38,6 +40,10 @@ lines; ordinary `verify` proves both 22/22 flag-off parity and a two-line fixtur
 `refingerprint` turns a JSONL manifest (`{"key":"...","audio_path":"..."}`) into a resumable
 Panako-grammar dump directory. It logs periodic progress to stderr, writes a JSON summary to
 stdout, and records non-fatal per-audio decode errors in `failures.jsonl`.
+`ab-compare` accepts a recursive directory of `.tdb` probes or a JSONL question manifest
+with `{"name":"...","key":"...","window":[start,stop]}` lines. Its pretty JSON report
+contains the exact store generations, row-level overlaps and score deltas, aggregate agreement,
+the largest divergences, and optional full rows via `--evidence QUESTION`.
 See `REPORT.md` for matcher parity, extraction fidelity, scale measurements, and the explicit
 performance/capability opportunity ledger.
 

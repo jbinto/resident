@@ -6,6 +6,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use resident_core::{Store, crosscheck, extract_audio, load_dump_dir, span};
 
+mod ab_compare;
 mod daemon;
 mod extract_verify;
 mod refingerprint;
@@ -111,6 +112,35 @@ enum Command {
         #[arg(long, default_value_t = 25)]
         progress_every: usize,
     },
+    /// Compare identical match questions against two stores.
+    AbCompare {
+        #[arg(long)]
+        a_store: PathBuf,
+        #[arg(long)]
+        b_store: PathBuf,
+        #[arg(
+            long,
+            required_unless_present = "questions",
+            conflicts_with = "questions"
+        )]
+        probes_dir: Option<PathBuf>,
+        #[arg(
+            long,
+            required_unless_present = "probes_dir",
+            conflicts_with = "probes_dir"
+        )]
+        questions: Option<PathBuf>,
+        #[arg(long, default_value_t = 25)]
+        k: usize,
+        #[arg(long, default_value_t = 0)]
+        max_score_delta: usize,
+        #[arg(long, default_value_t = 20)]
+        largest: usize,
+        #[arg(long)]
+        evidence: Option<String>,
+    },
+    /// Exercise store agreement against the real fixtures and one retirement.
+    ValidateAb { fixtures: PathBuf },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -201,6 +231,26 @@ fn main() -> anyhow::Result<()> {
             jobs,
             progress_every,
         } => refingerprint::run(&manifest, &output_dir, jobs, progress_every)?,
+        Command::AbCompare {
+            a_store,
+            b_store,
+            probes_dir,
+            questions,
+            k,
+            max_score_delta,
+            largest,
+            evidence,
+        } => ab_compare::run(ab_compare::Options {
+            a_store,
+            b_store,
+            probes_dir,
+            questions,
+            k,
+            max_score_delta,
+            largest,
+            evidence,
+        })?,
+        Command::ValidateAb { fixtures } => ab_compare::validate(&fixtures)?,
     }
     Ok(())
 }
