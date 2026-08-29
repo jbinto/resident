@@ -1,9 +1,10 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rayon::prelude::*;
 use rustfft::num_complex::Complex32;
@@ -30,6 +31,12 @@ const GABORATOR_ANALYSIS_SUPPORT: usize = 12_469;
 // unchanged. Longer inputs pay a fixed memory cost and retain this much context on each side.
 const STREAM_CORE_SAMPLES: usize = 24 * AUDIO_BLOCK;
 const STREAM_FFT_SIZE: usize = 1 << 18;
+
+static FFT_PLANNER: OnceLock<Mutex<FftPlanner<f32>>> = OnceLock::new();
+
+thread_local! {
+    static FFT_SCRATCH: RefCell<Vec<Complex32>> = const { RefCell::new(Vec::new()) };
+}
 
 struct AnalysisSpectrum {
     bins: Vec<Complex32>,
@@ -258,15 +265,33 @@ fn analysis_spectrum(samples: &[f32]) -> AnalysisSpectrum {
     for (output, &sample) in bins.iter_mut().zip(samples) {
         output.re = sample;
     }
-    let mut planner = FftPlanner::new();
-    let forward = planner.plan_fft_forward(fft_size);
-    let inverse = planner.plan_fft_inverse(fft_size);
-    forward.process(&mut bins);
+    let (forward, inverse) = fft_plans(fft_size);
+    process_fft(&forward, &mut bins);
     AnalysisSpectrum {
         bins,
         fft_size,
         inverse,
     }
+}
+
+fn fft_plans(fft_size: usize) -> (Arc<dyn Fft<f32>>, Arc<dyn Fft<f32>>) {
+    let planner = FFT_PLANNER.get_or_init(|| Mutex::new(FftPlanner::new()));
+    let mut planner = planner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    (
+        planner.plan_fft_forward(fft_size),
+        planner.plan_fft_inverse(fft_size),
+    )
+}
+
+fn process_fft(plan: &Arc<dyn Fft<f32>>, values: &mut [Complex32]) {
+    FFT_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        scratch.resize(plan.get_inplace_scratch_len(), Complex32::zero());
+        scratch.fill(Complex32::zero());
+        plan.process_with_scratch(values, &mut scratch);
+    });
 }
 
 fn band_magnitudes(
@@ -299,7 +324,7 @@ fn band_magnitudes(
             *value *= (-0.5 * distance_sd * distance_sd).exp() as f32;
         }
     }
-    spectrum.inverse.process(&mut filtered);
+    process_fft(&spectrum.inverse, &mut filtered);
 
     let two_sided_support = 2.0 * support_sd * frequency_sd / f64::from(SAMPLE_RATE);
     let mut native_step = 1;
@@ -601,5 +626,13 @@ mod tests {
         magnitudes[101][11] = 10.0;
         let events = event_points(&magnitudes, 30);
         assert!(!events.iter().any(|event| event.t == 12 && event.f == 100));
+    }
+
+    #[test]
+    fn fft_plans_are_shared_across_requests() {
+        let (first_forward, first_inverse) = fft_plans(STREAM_FFT_SIZE);
+        let (second_forward, second_inverse) = fft_plans(STREAM_FFT_SIZE);
+        assert!(Arc::ptr_eq(&first_forward, &second_forward));
+        assert!(Arc::ptr_eq(&first_inverse, &second_inverse));
     }
 }

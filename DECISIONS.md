@@ -136,3 +136,14 @@ The fixture proof overlays the real `pair0_t184` and `pair0_t288` cross-match wi
 query-time origin against `/corpus/wefunk/shows/0789/audio.m4a`. The default voter emits its
 30-hit modal line; opt-in residual voting emits two distinct offsets ranked 69 then 30. The
 ordinary flag-off oracle verification remains 22/22 before this additive assertion runs.
+
+## 2026-08-28 — share FFT plans and isolate reusable scratch per worker
+
+Cache RustFFT plans behind one process-wide planner and retain transform scratch in thread-local
+buffers. Plans are immutable `Arc`s after lookup, while each Rayon worker owns its scratch, so
+concurrent extraction requests do not serialize their transforms or alias mutable memory.
+Zero scratch before every call to preserve the fresh-allocation precondition conservatively;
+the optimization removes planning and allocation churn without changing transform inputs.
+
+The full native extraction validation remains unchanged after caching: 87.8% mean print
+recall, 88.6% precision, 97.3%/98.0% anchor recall/precision, and 42/44 expected references.

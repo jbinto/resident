@@ -82,6 +82,8 @@ itself is safe Rust and depends on `rustfft`, not Gaborator or JNI. One zero-pad
 spectrum per core is shared across 510 parallel analysis bands. Each band applies Gaborator
 v1's truncated Gaussian response, performs an inverse FFT, and samples on the reference
 power-of-two coefficient cadence before the wrapper-compatible 128-sample pooling.
+FFT plans are cached process-wide; transform scratch is retained per Rayon worker and zeroed
+before reuse. Concurrent extraction requests share immutable plans but never scratch memory.
 
 The event stage intentionally preserves two observable JGaborator/Panako behaviors: the
 225-frame circular-buffer delay (analysis support is 12,469 samples for scheduling) and a

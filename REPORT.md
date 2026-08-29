@@ -13,9 +13,9 @@ This report is maintained during the build and finalized at handoff.
 | Stream dumps into bounded shard spools during ingest | high reduction in peak build RAM, modest speed gain | current build loads input prints then bounds duplicate sorting memory to one shard |
 | Decode mapped fixed records as validated typed slices | low–medium | explicit safe byte reads keep the format obvious; bounds checks remain in the hot loop |
 | Replace 510 full-rate inverse FFTs with Gaborator-style octave downsampling | high (roughly 4–8× extraction throughput) | the direct full-rate formulation made the compatibility transform small and auditable; a multirate rewrite needs its own fixture proof |
-| Cache FFT plans and worker scratch across extraction requests | medium | current extraction plans once per file and allocates one spectrum per band; correctness was established before pooling state |
 | Analyze directly behind ffmpeg with one-core lookahead instead of a PCM disk spool | low–medium latency and temporary-I/O reduction | the spool makes total length and exact tail flushing explicit while already bounding RAM; the 50 TB target makes the trade safe |
 | Partition accepted multiline hits during voting instead of cloning the residual cloud and materializing internal evidence | medium for unusually dense blends, negligible in default mode | the opt-in implementation reuses the proven voter wholesale to isolate compatibility risk |
+| Specialize the plan cache to the fixed 262,144-point transform and omit its lookup lock | very low | the general planner cache keeps the invariant local and lock time excludes FFT execution |
 
 ### B — performance available by departing from Panako answers
 
@@ -58,6 +58,9 @@ This report is maintained during the build and finalized at handoff.
   the 25/66-frame event windows. Prints can be consumed incrementally in canonical order.
   `validate-stream` is exact on 22/22 real windows and a stitched 36-second boundary/flush
   case; the established extraction and downstream-match measurements are unchanged.
+- FFT plans are shared across extraction requests and transform scratch is reused per worker.
+  The post-cache `validate-extract` result remains exactly 87.8%/88.6%, 97.3%/98.0% anchors,
+  and 42/44 downstream references.
 - `extract` and `enroll` are live in the concurrent daemon. Enrollment was exercised from an
   absent store through generation publication and immediate snapshot visibility.
 
