@@ -64,5 +64,6 @@ performance/capability opportunity ledger.
 | `AGENTS.md` | toolchain, style, deps policy, commit rules |
 | `docs/ENGINE-FACTS.md` | everything known about Panako's data + matcher |
 | `docs/SCOPE.md` | in/out boundaries, awareness behaviors, future lanes |
+| `docs/MIXMD-REPORT.md` | proposed product, evidence-graph, and passage layers above resident |
 | `fixtures/` | mini store dump + golden query results (generated from the real corpus) |
 | `rig/` | the harness that generated fixtures (runs on the corpus machine, not here) |
