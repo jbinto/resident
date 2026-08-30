@@ -32,6 +32,9 @@ cargo run --release -- ab-compare \
   --a-store ./jar-store --b-store ./native-store --probes-dir ./probes
 cargo run --release -- span \
   --store ./archive-store --b-store ./reference-store --a-key archive --b-key reference
+cargo run --release -- passages \
+  --store ./archive-store --a-key archive --b-key reference
+cargo run --release -- discover --store ./archive-store --a-key archive
 ```
 
 The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
@@ -42,6 +45,11 @@ The `match`, `span`, and `crosscheck` wire verbs accept an off-by-default `multi
 ranked residual offset lines; their CLI equivalents use `--multi-line`. Ordinary `verify`
 proves 22/22 flag-off parity, while `validate-multiline` also drives a two-line fixture blend
 through stored-resource `span`.
+`passages` turns those evidence-bearing lines into deterministic directional passage observations
+with explicit support gaps and quality facts. `discover` performs the same passage construction
+exhaustively across the target snapshot, without a top-`k` cutoff. Both are presence-only,
+non-exclusive evidence: they can identify a corpus song underneath a drop without claiming the
+drop is absent or classifying the residual as voice.
 `refingerprint` turns a JSONL manifest (`{"key":"...","audio_path":"..."}`) into a resumable
 Panako-grammar dump directory. It logs periodic progress to stderr, writes a JSON summary to
 stdout, and records non-fatal per-audio decode errors in `failures.jsonl`.
@@ -65,5 +73,6 @@ performance/capability opportunity ledger.
 | `docs/ENGINE-FACTS.md` | everything known about Panako's data + matcher |
 | `docs/SCOPE.md` | in/out boundaries, awareness behaviors, future lanes |
 | `docs/MIXMD-REPORT.md` | proposed product, evidence-graph, and passage layers above resident |
+| `docs/MIXMD-ACTUAL-REPORT.md` | critique of mixmd's actual layers, snapshot receipts, migration, and implemented resident changes |
 | `fixtures/` | mini store dump + golden query results (generated from the real corpus) |
 | `rig/` | the harness that generated fixtures (runs on the corpus machine, not here) |

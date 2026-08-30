@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use resident_core::{
-    Store, crosscheck_between, crosscheck_between_multiline, extract_audio, load_dump_dir,
-    span_between, span_between_multiline,
+    Store, crosscheck_between, crosscheck_between_multiline, discover_passages_between,
+    extract_audio, load_dump_dir, passages_between, span_between, span_between_multiline,
 };
 
 mod ab_compare;
@@ -83,6 +83,40 @@ enum Command {
         evidence: bool,
         #[arg(long)]
         multi_line: bool,
+    },
+    /// Form geometry-compatible passages between two stored resources.
+    Passages {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        b_store: Option<PathBuf>,
+        #[arg(long)]
+        a_key: String,
+        #[arg(long)]
+        b_key: String,
+        #[arg(long, requires = "stop")]
+        start: Option<f64>,
+        #[arg(long, requires = "start")]
+        stop: Option<f64>,
+        /// Include the raw evidence-bearing region lines behind each passage.
+        #[arg(long)]
+        evidence: bool,
+    },
+    /// Exhaustively discover passage matches for one stored resource.
+    Discover {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        b_store: Option<PathBuf>,
+        #[arg(long)]
+        a_key: String,
+        #[arg(long, requires = "stop")]
+        start: Option<f64>,
+        #[arg(long, requires = "start")]
+        stop: Option<f64>,
+        /// Include the raw evidence-bearing region lines behind each passage.
+        #[arg(long)]
+        evidence: bool,
     },
     /// Retire a resource by publishing a new generation without its postings.
     Retire {
@@ -220,6 +254,49 @@ fn main() -> anyhow::Result<()> {
                 crosscheck_between(&store, target_store, &a_key, None, None, k, evidence)?
             };
             println!("{}", serde_json::to_string_pretty(&matches)?);
+        }
+        Command::Passages {
+            store,
+            b_store,
+            a_key,
+            b_key,
+            start,
+            stop,
+            evidence,
+        } => {
+            let store = Store::open(&store)?;
+            let target_store = b_store.as_deref().map(Store::open).transpose()?;
+            let target_store = target_store.as_ref().unwrap_or(&store);
+            let answer = passages_between(
+                &store,
+                target_store,
+                &a_key,
+                start.zip(stop),
+                &b_key,
+                evidence,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&answer)?);
+        }
+        Command::Discover {
+            store,
+            b_store,
+            a_key,
+            start,
+            stop,
+            evidence,
+        } => {
+            let store = Store::open(&store)?;
+            let target_store = b_store.as_deref().map(Store::open).transpose()?;
+            let target_store = target_store.as_ref().unwrap_or(&store);
+            let answer = discover_passages_between(
+                &store,
+                target_store,
+                &a_key,
+                start.zip(stop),
+                None,
+                evidence,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&answer)?);
         }
         Command::Retire { store, key } => {
             let (_, stats) = Store::retire(&store, &key)?;

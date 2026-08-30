@@ -18,6 +18,7 @@ engine identity.
 | `core/src/config.rs`, `fingerprint.rs`, `dump.rs` | pinned domain, conversions, dump grammar |
 | `core/src/store.rs`, `mmap_view.rs` | generations, shards, forward/inverted access |
 | `core/src/matcher.rs`, `span.rs` | oracle voter, evidence, one/cross-store questions |
+| `core/src/passage.rs` | directional passage identity, support spans, geometry stitching |
 | `core/src/extract.rs` | bounded native audio analysis and ordered print emission |
 | `resident/src/daemon.rs` | concurrent typed JSON-lines process edge |
 | `resident/src/refingerprint.rs` | resumable parallel corpus dump production |
@@ -84,6 +85,27 @@ groups segments by reference; `k` still limits final references, not regional li
 7,500-second fixture resource crosschecks the 3.2M-posting store in about 0.5 seconds on the
 development Mac. CLI `--b-store` and daemon `"b_store"` open an immutable target generation
 for the request; absence keeps the original attached-store behavior.
+
+## Passage observations
+
+`core/src/passage.rs` is an additive product-facing lane over the unchanged multiline voter.
+`passages` answers one A→B pair; `discover` exhaustively fans A out over a target snapshot rather
+than applying `crosscheck`'s ranking limit. Both retain store generations and endpoint content
+hashes so a consumer can bank immutable observations and supersede them after audio or algorithm
+changes without re-extracting fingerprints.
+
+Passage construction first turns each accepted line's filtered hits into evidence-dense support
+runs. A run breaks when either clock goes more than 1.5 seconds without another filtered hit.
+Region-local lines join one alignment track only when both clocks move forward, their envelope gap
+is at most 20 seconds, the endpoint offset changes by at most 2 seconds, and time/pitch factors move
+by at most 0.03. Those constants define `passage-v1`; changing one requires a new profile. A stitched
+envelope may contain a hole, but that hole remains visible between support entries and is never
+reported as matched audio.
+
+The result is deliberately directional and non-exclusive. It proves that the matched corpus audio
+is present at the reported support; it neither treats missing reverse evidence as a rejection nor
+claims that another simultaneous component is absent. Corpus-global recurrence classes, names,
+human decisions, and typed timeline containment stay outside resident.
 
 ## Process edge
 

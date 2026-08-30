@@ -77,6 +77,40 @@ keys and `"all"` are resolved only in B. `multi_line` has the same per-region se
 `span`; `k` remains the final reference limit, while every accepted line contributes a
 segment and to that reference's `score_total`.
 
+### passages — geometry-bearing evidence for one resource pair
+```
+{"a_key": "...", "a_window": [t0, t1] | null, "b_key": "...",
+ "b_store": "/optional/target/store", "evidence": false}
+```
+→ `{"snapshot": {"profile":"passage-v1", "direction":"a_to_b", "config_id":"...",
+"a_generation":"...", "b_generation":"...", "a_key":"...", "a_content_hash":"..."},
+"b_key":"...", "b_content_hash":"...", "passages":[...]}`
+
+Each passage has a deterministic `passage_id`, first-to-last `a_envelope`/`b_envelope`, explicit
+`support` spans on both clocks, and a `quality` vector. The vector reports total/peak score,
+matched hits, supported seconds, coverage within the A envelope, largest unsupported A gap,
+segment/support counts, factor ranges, and minimum `sec_with_match`. Envelopes do **not** claim
+that holes matched; only `support` does. All observations are presence evidence and non-exclusive:
+a passage saying B is present underneath A does not say that no overlay is present.
+
+The engine always uses evidence-bearing multiline matching internally. `evidence:true` additionally
+returns the accepted raw region `segments` for diagnosis; passage identity is unchanged by the flag.
+The request remains directional—A was probed against B—and absence of B→A is not negative evidence.
+
+### discover — exhaustive directional passage fan-out
+```
+{"a_key": "...", "a_window": [t0, t1] | null, "targets": "all" | ["key", ...],
+ "b_store": "/optional/target/store", "evidence": false}
+```
+→ `{"snapshot": {...as passages...}, "matches":[{"ref_key":"...",
+"ref_content_hash":"...", "passages":[...], "score_total":N,
+"supported_seconds":s}, ...]}`
+
+Discovery applies no top-`k` truncation. Matches sort by supported seconds, then score and key;
+the exact self key is excluded. It is exhaustive only for the stated A→B snapshot and target set.
+A corpus job that needs the union of both directions must also schedule corpus→A probes; reverse
+absence must never erase a surviving forward observation.
+
 ### ingest
 `{"dump_dir": "<dir with *.tdb + *_meta_data.txt>"}` or
 `{"resources": [{"key": "...", "prints_path": "...", "duration": s}, ...], "replace": false}`
@@ -104,4 +138,6 @@ No store interaction.
 
 Same store generation + same request ⇒ byte-identical response (modulo `id`). Stable sort
 orders everywhere; ties broken by key. This is load-bearing for fixture verification and for
-the consumer's snapshot-diff workflows.
+the consumer's snapshot-diff workflows. A `passage_id` is derived from the profile, config,
+both endpoint keys and content hashes, support geometry, and factor ranges. It therefore remains
+stable across unrelated store-generation changes while the response still records both snapshots.

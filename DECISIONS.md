@@ -234,3 +234,46 @@ The fixture proof persists the real `pair0_t184` + `pair0_t288` overlaid prints 
 resource, then runs actual cross-store `span` against `0789`. The default path emits score 30;
 the opt-in path emits ranked scores 69 and 30 at distinct reference offsets. The ordinary
 single-line oracle remains 22/22.
+
+## 2026-08-30 — add a provenance-rich passage lane without changing compatibility verbs
+
+Keep `match`, `span`, and `crosscheck` byte/behavior compatible and add `passages` plus `discover`
+as the `passage-v1` profile. Passage mode always asks the multiline voter for filtered-hit evidence,
+forms dense support runs, and stitches only geometry-compatible region lines. Its envelope is a
+navigation aid; support entries are the only intervals claimed as matched. This prevents a fixed
+30-second region or an app-side seam rule from silently turning an unsupported overlay into matched
+underlay extent.
+
+Make the profile constants part of the versioned judgment: a support run breaks after a 1.5-second
+hit gap; line envelopes may remain in one alignment family across at most 20 seconds only when their
+offset changes by at most 2 seconds and time/pitch factors by at most 0.03. A later calibration must
+mint a new profile rather than changing what `passage-v1` means.
+
+Derive passage ids from profile, config, endpoint keys/content hashes, support geometry, and factor
+ranges—not store generation or the optional diagnostic segment payload. Unrelated ingest therefore
+does not churn an observation's identity, while both exact generations remain in every response for
+reproducibility and supersession.
+
+## 2026-08-30 — preserve directional observations and reject top-k absence
+
+Label every passage snapshot `a_to_b`. A matcher observation says A was probed against B; a missing
+B→A row is neither a veto nor proof of absence. A graph consumer may fuse geometry-compatible forward
+and reverse observations as one evidence relation, retaining which direction(s) supported it, but
+must take their union rather than intersection and must not double-count a mirrored pair.
+
+`discover` therefore exhausts the stated A→B target snapshot and excludes only the exact self key.
+It does not expose `k`, because ranking truncation cannot define absence in a persistent recurrence
+graph. Incremental corpus completeness still requires scheduling the reverse corpus→new direction;
+resident does not hide that second job behind a misleading symmetric result.
+
+## 2026-08-30 — keep semantic recurrence classes outside resident
+
+Resident owns filtered-hit assignment, support masks, passage splitting/stitching, pairwise passage
+identity, and named quality facts. It does not own corpus-global recurrence-class revisions, song
+identity, set containment, borrowability, or human rulings. Those depend on canon and on durable graph
+history that the fingerprint store deliberately does not contain.
+
+All passage observations are non-exclusive presence evidence. They may prove that a corpus song is
+present beneath a drop, but sparse landmark prints cannot prove that the drop is voice, estimate a
+reconstructable residual, or show that no simultaneous layer exists. A future residual-audio lane
+requires richer signal features and its own validation; the passage API must not fake it from gaps.

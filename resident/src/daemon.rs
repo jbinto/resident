@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use resident_core::config::{MAX_FREQUENCY_BIN, MAX_HASH, bins_to_seconds};
 use resident_core::{
     DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, crosscheck_between,
-    crosscheck_between_multiline, extract_audio, load_dump_dir, load_prints, span_between,
-    span_between_multiline,
+    crosscheck_between_multiline, discover_passages_between, extract_audio, load_dump_dir,
+    load_prints, passages_between, span_between, span_between_multiline,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -58,6 +58,26 @@ enum Request {
         evidence: bool,
         #[serde(default)]
         multi_line: bool,
+    },
+    Passages {
+        a_key: String,
+        #[serde(default)]
+        a_window: Option<[f64; 2]>,
+        b_key: String,
+        #[serde(default)]
+        b_store: Option<PathBuf>,
+        #[serde(default)]
+        evidence: bool,
+    },
+    Discover {
+        a_key: String,
+        #[serde(default)]
+        a_window: Option<[f64; 2]>,
+        targets: Targets,
+        #[serde(default)]
+        b_store: Option<PathBuf>,
+        #[serde(default)]
+        evidence: bool,
     },
     Ingest {
         #[serde(default)]
@@ -290,6 +310,55 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                 )?
             };
             Ok(json!({ "matches": matches }))
+        }
+        Request::Passages {
+            a_key,
+            a_window,
+            b_key,
+            b_store,
+            evidence,
+        } => {
+            let store = required_store(state)?;
+            let target_store = b_store.as_deref().map(Store::open).transpose()?;
+            let target_store = target_store.as_ref().unwrap_or(store.as_ref());
+            let window = a_window.map(|window| (window[0], window[1]));
+            Ok(json!(passages_between(
+                &store,
+                target_store,
+                &a_key,
+                window,
+                &b_key,
+                evidence,
+            )?))
+        }
+        Request::Discover {
+            a_key,
+            a_window,
+            targets,
+            b_store,
+            evidence,
+        } => {
+            let keys = match targets {
+                Targets::All(value) if value == "all" => None,
+                Targets::All(value) => {
+                    return Err(Error::BadRequest(format!(
+                        "targets string must be \"all\", got {value:?}"
+                    )));
+                }
+                Targets::Keys(keys) => Some(keys),
+            };
+            let store = required_store(state)?;
+            let target_store = b_store.as_deref().map(Store::open).transpose()?;
+            let target_store = target_store.as_ref().unwrap_or(store.as_ref());
+            let window = a_window.map(|window| (window[0], window[1]));
+            Ok(json!(discover_passages_between(
+                &store,
+                target_store,
+                &a_key,
+                window,
+                keys.as_deref(),
+                evidence,
+            )?))
         }
         Request::Ingest {
             dump_dir,
@@ -563,5 +632,32 @@ mod tests {
             panic!("expected crosscheck request");
         };
         assert!(multi_line);
+    }
+
+    #[test]
+    fn passage_verbs_are_additive_and_evidence_defaults_off() {
+        let request: Request =
+            serde_json::from_str(r#"{"verb":"passages","a_key":"a","b_key":"b"}"#)
+                .expect("valid passages request");
+        let Request::Passages {
+            b_store, evidence, ..
+        } = request
+        else {
+            panic!("expected passages request");
+        };
+        assert!(b_store.is_none());
+        assert!(!evidence);
+
+        let request: Request =
+            serde_json::from_str(r#"{"verb":"discover","a_key":"a","targets":"all"}"#)
+                .expect("valid discover request");
+        let Request::Discover {
+            b_store, evidence, ..
+        } = request
+        else {
+            panic!("expected discover request");
+        };
+        assert!(b_store.is_none());
+        assert!(!evidence);
     }
 }

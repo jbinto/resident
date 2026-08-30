@@ -9,7 +9,7 @@ out wrong, the engine says so loudly instead of approximating.
 - STRATEGY=PANAKO matching semantics under the single pinned config (ENGINE-FACTS §config).
 - Ingest of Panako plain-text fingerprint dumps; own versioned store (forward + inverted
   orders); generation swap; retire.
-- Verbs: ping · match · span · crosscheck · ingest · retire · stats · extract · enroll
+- Verbs: ping · match · span · crosscheck · passages · discover · ingest · retire · stats · extract · enroll
   (CONTRACT.md).
 - Fixture verification harness (`verify`).
 - Opt-in ranked multi-line emission for `match`, `span`, and `crosscheck`; absent/false retains
@@ -20,6 +20,9 @@ out wrong, the engine says so loudly instead of approximating.
   windows, including row spans, score deltas, ranked divergences, and named evidence dumps.
 - Cross-store `span` and `crosscheck`: probe resources in A, explicit targets or an entire
   reference/additional-corpus store in B, under one required config identity.
+- Additive `passage-v1` observations: deterministic pairwise passage ids, explicit dense-support
+  intervals and holes, quality vectors, endpoint revisions, geometry-aware region stitching, and
+  exhaustive directional discovery without top-`k` graph loss.
 - Conversion layer: time bins↔seconds, freq bins↔Hz.
 - **Extraction** (SPEC §extraction — built AFTER matcher parity is green): decode/resample
   front (ffmpeg subprocess or established crates) → log-frequency transform → event points →
@@ -34,6 +37,10 @@ out wrong, the engine says so loudly instead of approximating.
 - Network transport (stdio only; unix socket is a planned iteration).
 - Reading Panako's LMDB directly (dumps are the compat seam).
 - CI, packaging, distribution (will come; `./check.sh` is the gate meanwhile).
+- Corpus-global recurrence-class identity, title/name resolution, canon mutation, and human review
+  workflow. Resident supplies immutable signal observations; a persistent middle layer owns these.
+- Claims that an unmatched overlay is voice or that a matched underlay is the only active layer.
+  Sparse landmark fingerprints prove presence, not exclusivity or reconstructable residual audio.
 
 ## Boundary awareness (required behaviors)
 
