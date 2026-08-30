@@ -75,6 +75,8 @@ enum Request {
         a_window: Option<[f64; 2]>,
         targets: Targets,
         #[serde(default)]
+        exclude_keys: Vec<String>,
+        #[serde(default)]
         b_store: Option<PathBuf>,
         #[serde(default)]
         evidence: bool,
@@ -335,6 +337,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             a_key,
             a_window,
             targets,
+            exclude_keys,
             b_store,
             evidence,
         } => {
@@ -357,6 +360,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                 &a_key,
                 window,
                 keys.as_deref(),
+                (!exclude_keys.is_empty()).then_some(exclude_keys.as_slice()),
                 evidence,
             )?))
         }

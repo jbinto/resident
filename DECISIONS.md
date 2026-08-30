@@ -277,3 +277,35 @@ All passage observations are non-exclusive presence evidence. They may prove tha
 present beneath a drop, but sparse landmark prints cannot prove that the drop is voice, estimate a
 reconstructable residual, or show that no simultaneous layer exists. A future residual-audio lane
 requires richer signal features and its own validation; the passage API must not fake it from gaps.
+
+## 2026-08-30 — replay production query geometry as passage-v2
+
+Supersede the unaccepted `passage-v1` profile from revision `fcb8add` with `passage-v2`. Keep the
+compatibility verbs on their established non-overlapping 30-second regions, but form passages from
+12-second regions on an 8-second hop anchored at zero: the geometry used by 2,644 of 2,670 production
+Panako identify artifacts. Short five-to-eight-second matches can otherwise straddle a 30-second seam
+and fail the match-duration gate in both halves.
+
+Overlapping query regions repeat exact evidence hits. Deduplicate by query time, reference time,
+original hash, and matched hash before support construction; report that count as `matched_hits`.
+Drop passage `score_total`, because summing residual peels and overlapping windows makes one alignment
+look stronger merely because it was asked twice. Retain `score_peak` as a diagnostic voter fact.
+Passage identity depends on endpoint fingerprint identities and deduplicated support geometry, not
+score or factor extrema.
+
+Bound CLI discovery with repeatable `--target` and accept repeatable `--exclude-key` on CLI and wire.
+Different encodings of one logical audio can have different fingerprint vectors and are acoustically
+indistinguishable from a whole-recording rebroadcast. Resident must not guess; the corpus owner supplies
+known sibling keys, and an unexcluded sibling is honestly reported as a recurrence candidate.
+
+## 2026-08-30 — remove duration from fingerprint identity
+
+Panako's cached-print constructor sets `t3 = -1`, but `PanakoStrategy.store()` rewrites cache metadata
+duration from the last fingerprint's `t3`. Under the pinned latency this computes
+`(-128 + 12469) / 16000 = 0.7713125`, the exact rotten value found on 1,498 production resources.
+The fingerprint vectors and matching index remain valid.
+
+Hash canonical `(hash,t,f)` postings only. Duration is useful resource metadata but is neither a
+fingerprint fact nor match identity; repairing it must not churn passage ids. Old manifests retain
+their historical hash bytes, so passage output computes the prints-only endpoint hash from forward
+postings until a manifest-only rehash publishes the corrected identity profile.

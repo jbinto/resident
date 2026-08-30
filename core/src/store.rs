@@ -217,7 +217,7 @@ impl Store {
             resource
                 .prints
                 .sort_by_key(|print| (print.t, print.hash, print.f));
-            let content_hash = fingerprint_content_hash(&resource.prints, resource.meta.duration);
+            let content_hash = fingerprint_content_hash(&resource.prints);
             if let Some(existing) = current
                 .resources_by_key
                 .get(&resource.meta.key)
@@ -409,6 +409,12 @@ impl Store {
             .get(&id)
             .map(|index| &self.manifest.resources[*index])
             .ok_or_else(|| Error::InvalidStore(format!("posting references unknown resource {id}")))
+    }
+
+    /// Identity of the stored fingerprint vector only. Duration is mutable metadata and Panako's
+    /// cached-store path is known to corrupt it; passage identity must survive a metadata repair.
+    pub fn fingerprint_content_hash(&self, key: &str) -> Result<String> {
+        Ok(fingerprint_content_hash(&self.forward(key, None)?))
     }
 
     pub fn forward(&self, key: &str, window: Option<(u32, u32)>) -> Result<Vec<Fingerprint>> {
@@ -636,7 +642,7 @@ fn write_shard(
     for (id, resource) in resources {
         let mut canonical = resource.prints;
         canonical.sort_by_key(|print| (print.t, print.hash, print.f));
-        let content_hash = fingerprint_content_hash(&canonical, resource.meta.duration);
+        let content_hash = fingerprint_content_hash(&canonical);
         let t_min = canonical.first().map_or(0, |print| print.t);
         let t_max = canonical.last().map_or(0, |print| print.t);
         let forward_start = postings.len() as u64;
@@ -826,9 +832,8 @@ fn generation_id_from_infos(resources: &[ResourceInfo]) -> String {
     hex::encode(digest.finalize())[..24].to_owned()
 }
 
-fn fingerprint_content_hash(prints: &[Fingerprint], duration: f64) -> String {
+fn fingerprint_content_hash(prints: &[Fingerprint]) -> String {
     let mut digest = Sha256::new();
-    digest.update(duration.to_le_bytes());
     for print in prints {
         digest.update(print.hash.to_le_bytes());
         digest.update(print.t.to_le_bytes());

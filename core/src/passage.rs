@@ -1,12 +1,24 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Error, EvidenceHit, Result, Segment, Store, crosscheck_between_multiline,
-    span_between_multiline,
+    Error, EvidenceHit, Result, Segment, Store,
+    span::{
+        RegionGeometry, crosscheck_between_multiline_geometry, span_between_multiline_geometry,
+    },
 };
 
-pub const PASSAGE_PROFILE: &str = "passage-v1";
+pub const PASSAGE_PROFILE: &str = "passage-v2";
+
+// Production identify artifacts used 12-second windows every 8 seconds. Passage mode replays that
+// geometry over stored prints; compatibility span/crosscheck keep their original 30-second regions.
+const PASSAGE_GEOMETRY: RegionGeometry = RegionGeometry {
+    window_seconds: 12.0,
+    hop_seconds: 8.0,
+    anchor_at_zero: true,
+};
 
 // A passage may retain a short unsupported hole (for example, a station drop over a corpus song)
 // only as an explicit gap between support spans. This is the maximum separation at which two
@@ -45,7 +57,6 @@ pub struct SupportSpan {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PassageQuality {
-    pub score_total: usize,
     pub score_peak: usize,
     pub matched_hits: usize,
     pub supported_seconds: f64,
@@ -89,7 +100,7 @@ pub struct PassageMatch {
     pub ref_key: String,
     pub ref_content_hash: String,
     pub passages: Vec<Passage>,
-    pub score_total: usize,
+    pub matched_hits: usize,
     pub supported_seconds: f64,
 }
 
@@ -109,15 +120,23 @@ pub fn passages_between(
 ) -> Result<PairPassages> {
     // Evidence is an internal requirement even when the caller does not request the diagnostic
     // lines: honest support comes from filtered hits, not a segment's first/last-hit envelope.
-    let segments = span_between_multiline(a_store, b_store, a_key, a_window, b_key, true)?;
-    let a = a_store.resource(a_key)?;
-    let b = b_store.resource(b_key)?;
+    let segments = span_between_multiline_geometry(
+        a_store,
+        b_store,
+        a_key,
+        a_window,
+        b_key,
+        true,
+        PASSAGE_GEOMETRY,
+    )?;
+    let a_content_hash = a_store.fingerprint_content_hash(a_key)?;
+    let b_content_hash = b_store.fingerprint_content_hash(b_key)?;
     let snapshot = snapshot(a_store, b_store, a_key)?;
     let passages = passages_from_segments(
         a_key,
-        &a.content_hash,
+        &a_content_hash,
         b_key,
-        &b.content_hash,
+        &b_content_hash,
         a_store.config_id(),
         segments,
         include_segments,
@@ -125,7 +144,7 @@ pub fn passages_between(
     Ok(PairPassages {
         snapshot,
         b_key: b_key.to_owned(),
-        b_content_hash: b.content_hash.clone(),
+        b_content_hash,
         passages,
     })
 }
@@ -136,34 +155,40 @@ pub fn discover_passages_between(
     a_key: &str,
     a_window: Option<(f64, f64)>,
     targets: Option<&[String]>,
+    exclude_keys: Option<&[String]>,
     include_segments: bool,
 ) -> Result<PassageDiscovery> {
     // Discovery is exhaustive. A ranking limit cannot define absence in a persistent evidence
     // graph, so the existing crosscheck limit is set to the complete target population here.
-    let raw = crosscheck_between_multiline(
+    let raw = crosscheck_between_multiline_geometry(
         a_store,
         b_store,
         a_key,
         a_window,
         targets,
-        b_store.resources().len().max(1),
         true,
+        PASSAGE_GEOMETRY,
     )?;
-    let a = a_store.resource(a_key)?;
+    let a_content_hash = a_store.fingerprint_content_hash(a_key)?;
     let snapshot = snapshot(a_store, b_store, a_key)?;
+    let excluded: HashSet<&str> = exclude_keys
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .collect();
     let mut matches = Vec::new();
     for found in raw {
         // A resource is not evidence of its own recurrence. Exact-key exclusion is owned here so
         // every consumer gets the same discovery semantics.
-        if found.ref_key == a_key {
+        if found.ref_key == a_key || excluded.contains(found.ref_key.as_str()) {
             continue;
         }
-        let b = b_store.resource(&found.ref_key)?;
+        let b_content_hash = b_store.fingerprint_content_hash(&found.ref_key)?;
         let passages = passages_from_segments(
             a_key,
-            &a.content_hash,
+            &a_content_hash,
             &found.ref_key,
-            &b.content_hash,
+            &b_content_hash,
             a_store.config_id(),
             found.segments,
             include_segments,
@@ -173,10 +198,10 @@ pub fn discover_passages_between(
         }
         matches.push(PassageMatch {
             ref_key: found.ref_key,
-            ref_content_hash: b.content_hash.clone(),
-            score_total: passages
+            ref_content_hash: b_content_hash,
+            matched_hits: passages
                 .iter()
-                .map(|passage| passage.quality.score_total)
+                .map(|passage| passage.quality.matched_hits)
                 .sum(),
             supported_seconds: passages
                 .iter()
@@ -188,14 +213,13 @@ pub fn discover_passages_between(
     matches.sort_by(|a, b| {
         b.supported_seconds
             .total_cmp(&a.supported_seconds)
-            .then_with(|| b.score_total.cmp(&a.score_total))
+            .then_with(|| b.matched_hits.cmp(&a.matched_hits))
             .then_with(|| a.ref_key.cmp(&b.ref_key))
     });
     Ok(PassageDiscovery { snapshot, matches })
 }
 
 fn snapshot(a_store: &Store, b_store: &Store, a_key: &str) -> Result<PassageSnapshot> {
-    let a = a_store.resource(a_key)?;
     let a_stats = a_store.stats();
     let b_stats = b_store.stats();
     Ok(PassageSnapshot {
@@ -205,7 +229,7 @@ fn snapshot(a_store: &Store, b_store: &Store, a_key: &str) -> Result<PassageSnap
         a_generation: a_stats.generation,
         b_generation: b_stats.generation,
         a_key: a_key.to_owned(),
-        a_content_hash: a.content_hash.clone(),
+        a_content_hash: a_store.fingerprint_content_hash(a_key)?,
     })
 }
 
@@ -301,19 +325,26 @@ fn passage_from_track(
     segments: Vec<Segment>,
     include_segments: bool,
 ) -> Result<Passage> {
-    let mut support = Vec::new();
+    let mut hits = Vec::new();
     for segment in &segments {
         let evidence = segment.evidence.as_ref().ok_or_else(|| {
             Error::Internal("passage construction requires internal match evidence".into())
         })?;
-        support.extend(support_from_hits(&evidence.hits));
+        hits.extend(evidence.hits.iter().cloned());
     }
-    support.sort_by(|a, b| {
-        a.a_start
-            .total_cmp(&b.a_start)
-            .then_with(|| a.b_start.total_cmp(&b.b_start))
+    hits.sort_by(|a, b| {
+        (a.q_t, a.ref_t, a.original_hash, a.matched_hash).cmp(&(
+            b.q_t,
+            b.ref_t,
+            b.original_hash,
+            b.matched_hash,
+        ))
     });
-    support = merge_support(support);
+    hits.dedup_by(|a, b| {
+        (a.q_t, a.ref_t, a.original_hash, a.matched_hash)
+            == (b.q_t, b.ref_t, b.original_hash, b.matched_hash)
+    });
+    let support = support_from_hits(&hits);
     let first = support.first().ok_or_else(|| {
         Error::Internal("accepted match line carried no filtered-hit evidence".into())
     })?;
@@ -342,13 +373,12 @@ fn passage_from_track(
         .max_by(f64::total_cmp)
         .unwrap_or(0.0);
     let quality = PassageQuality {
-        score_total: segments.iter().map(|segment| segment.score).sum(),
         score_peak: segments
             .iter()
             .map(|segment| segment.score)
             .max()
             .unwrap_or(0),
-        matched_hits: support.iter().map(|span| span.hits).sum(),
+        matched_hits: hits.len(),
         supported_seconds,
         query_coverage: if envelope_seconds > 0.0 {
             (supported_seconds / envelope_seconds).clamp(0.0, 1.0)
@@ -391,7 +421,6 @@ fn passage_from_track(
         b_content_hash,
         config_id,
         &support,
-        &quality,
     );
     Ok(Passage {
         passage_id,
@@ -441,25 +470,6 @@ fn support_from_hits(hits: &[EvidenceHit]) -> Vec<SupportSpan> {
     out
 }
 
-fn merge_support(spans: Vec<SupportSpan>) -> Vec<SupportSpan> {
-    let mut out: Vec<SupportSpan> = Vec::new();
-    for span in spans {
-        if let Some(last) = out.last_mut()
-            && span.a_start - last.a_stop <= MAX_SUPPORT_HIT_GAP_SECONDS
-            && span.b_start - last.b_stop <= MAX_SUPPORT_HIT_GAP_SECONDS
-            && span.b_start + MAX_OFFSET_JUMP_SECONDS >= last.b_stop
-        {
-            last.a_stop = last.a_stop.max(span.a_stop);
-            last.b_start = last.b_start.min(span.b_start);
-            last.b_stop = last.b_stop.max(span.b_stop);
-            last.hits += span.hits;
-            continue;
-        }
-        out.push(span);
-    }
-    out
-}
-
 fn passage_id(
     a_key: &str,
     a_content_hash: &str,
@@ -467,7 +477,6 @@ fn passage_id(
     b_content_hash: &str,
     config_id: &str,
     support: &[SupportSpan],
-    quality: &PassageQuality,
 ) -> String {
     let mut digest = Sha256::new();
     for value in [
@@ -487,10 +496,6 @@ fn passage_id(
         }
         digest.update((span.hits as u64).to_le_bytes());
     }
-    digest.update(quality.time_factor_min.to_bits().to_le_bytes());
-    digest.update(quality.time_factor_max.to_bits().to_le_bytes());
-    digest.update(quality.pitch_factor_min.to_bits().to_le_bytes());
-    digest.update(quality.pitch_factor_max.to_bits().to_le_bytes());
     format!("psg_{}", hex::encode(digest.finalize()))
 }
 
@@ -505,8 +510,8 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, offset)| EvidenceHit {
-                q_t: index as u32,
-                ref_t: index as u32,
+                q_t: ((a_start + offset) / crate::config::TIME_BIN_SECONDS) as u32,
+                ref_t: ((b_start + offset) / crate::config::TIME_BIN_SECONDS) as u32,
                 q_seconds: a_start + offset,
                 ref_seconds: b_start + offset,
                 original_hash: index as u64,
@@ -571,5 +576,18 @@ mod tests {
         assert_eq!(compact[0].passage_id, explained[0].passage_id);
         assert!(compact[0].segments.is_none());
         assert!(explained[0].segments.is_some());
+    }
+
+    #[test]
+    fn overlapping_query_regions_do_not_count_the_same_hits_twice() {
+        let repeated = segment(0.0, 100.0, &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        let found = passages(vec![repeated.clone(), repeated]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].quality.segment_count, 2);
+        assert_eq!(found[0].quality.matched_hits, 6);
+        assert_eq!(
+            found[0].support.iter().map(|span| span.hits).sum::<usize>(),
+            6
+        );
     }
 }

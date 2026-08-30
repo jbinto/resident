@@ -20,7 +20,8 @@ out wrong, the engine says so loudly instead of approximating.
   windows, including row spans, score deltas, ranked divergences, and named evidence dumps.
 - Cross-store `span` and `crosscheck`: probe resources in A, explicit targets or an entire
   reference/additional-corpus store in B, under one required config identity.
-- Additive `passage-v1` observations: deterministic pairwise passage ids, explicit dense-support
+- Additive `passage-v2` observations: production-compatible 12-second/8-second query geometry,
+  deterministic pairwise passage ids, explicit dense-support
   intervals and holes, quality vectors, endpoint revisions, geometry-aware region stitching, and
   exhaustive directional discovery without top-`k` graph loss.
 - Conversion layer: time bins↔seconds, freq bins↔Hz.

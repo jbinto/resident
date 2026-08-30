@@ -8,6 +8,19 @@ use crate::{Error, Evidence, Matcher, Result, Store};
 
 const REGION_SECONDS: f64 = 30.0;
 
+#[derive(Clone, Copy)]
+pub(crate) struct RegionGeometry {
+    pub window_seconds: f64,
+    pub hop_seconds: f64,
+    pub anchor_at_zero: bool,
+}
+
+const COMPATIBILITY_GEOMETRY: RegionGeometry = RegionGeometry {
+    window_seconds: REGION_SECONDS,
+    hop_seconds: REGION_SECONDS,
+    anchor_at_zero: false,
+};
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
     pub a_start: f64,
@@ -49,7 +62,7 @@ pub fn span_between(
 ) -> Result<Vec<Segment>> {
     ensure_compatible(a_store, b_store)?;
     b_store.resource(b_key)?;
-    let regions = region_prints(a_store, a_key, a_window)?;
+    let regions = region_prints(a_store, a_key, a_window, COMPATIBILITY_GEOMETRY)?;
     let matcher = Matcher::new(b_store);
     let candidates: Vec<_> = regions
         .par_iter()
@@ -83,9 +96,29 @@ pub fn span_between_multiline(
     b_key: &str,
     evidence: bool,
 ) -> Result<Vec<Segment>> {
+    span_between_multiline_geometry(
+        a_store,
+        b_store,
+        a_key,
+        a_window,
+        b_key,
+        evidence,
+        COMPATIBILITY_GEOMETRY,
+    )
+}
+
+pub(crate) fn span_between_multiline_geometry(
+    a_store: &Store,
+    b_store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    b_key: &str,
+    evidence: bool,
+    geometry: RegionGeometry,
+) -> Result<Vec<Segment>> {
     ensure_compatible(a_store, b_store)?;
     b_store.resource(b_key)?;
-    let regions = region_prints(a_store, a_key, a_window)?;
+    let regions = region_prints(a_store, a_key, a_window, geometry)?;
     let matcher = Matcher::new(b_store);
     let rows: Vec<_> = regions
         .par_iter()
@@ -132,7 +165,7 @@ pub fn crosscheck_between(
     } else {
         None
     };
-    let regions = region_prints(a_store, a_key, a_window)?;
+    let regions = region_prints(a_store, a_key, a_window, COMPATIBILITY_GEOMETRY)?;
     let matcher = Matcher::new(b_store);
     let rows: Vec<_> = regions
         .par_iter()
@@ -197,6 +230,30 @@ pub fn crosscheck_between_multiline(
     if k == 0 {
         return Err(Error::BadRequest("k must be greater than zero".into()));
     }
+    crosscheck_between_multiline_geometry(
+        a_store,
+        b_store,
+        a_key,
+        a_window,
+        targets,
+        evidence,
+        COMPATIBILITY_GEOMETRY,
+    )
+    .map(|mut matches| {
+        matches.truncate(k);
+        matches
+    })
+}
+
+pub(crate) fn crosscheck_between_multiline_geometry(
+    a_store: &Store,
+    b_store: &Store,
+    a_key: &str,
+    a_window: Option<(f64, f64)>,
+    targets: Option<&[String]>,
+    evidence: bool,
+    geometry: RegionGeometry,
+) -> Result<Vec<CrosscheckMatch>> {
     ensure_compatible(a_store, b_store)?;
     let target_ids = if let Some(keys) = targets {
         let mut ids = HashSet::new();
@@ -207,7 +264,7 @@ pub fn crosscheck_between_multiline(
     } else {
         None
     };
-    let regions = region_prints(a_store, a_key, a_window)?;
+    let regions = region_prints(a_store, a_key, a_window, geometry)?;
     let matcher = Matcher::new(b_store);
     let rows: Vec<_> = regions
         .par_iter()
@@ -249,7 +306,6 @@ pub fn crosscheck_between_multiline(
             .cmp(&a.score_total)
             .then_with(|| a.ref_key.cmp(&b.ref_key))
     });
-    matches.truncate(k);
     Ok(matches)
 }
 
@@ -267,9 +323,17 @@ fn region_prints(
     store: &Store,
     key: &str,
     window: Option<(f64, f64)>,
+    geometry: RegionGeometry,
 ) -> Result<Vec<Vec<crate::Fingerprint>>> {
     let resource = store.resource(key)?;
     let natural_stop = resource.t_max.saturating_add(1);
+    if !geometry.window_seconds.is_finite()
+        || !geometry.hop_seconds.is_finite()
+        || geometry.window_seconds <= 0.0
+        || geometry.hop_seconds <= 0.0
+    {
+        return Err(Error::Internal("invalid query region geometry".into()));
+    }
     let (start, stop) = if let Some((start, stop)) = window {
         if !start.is_finite() || !stop.is_finite() || start < 0.0 || start >= stop {
             return Err(Error::BadRequest(
@@ -280,6 +344,8 @@ fn region_prints(
             seconds_to_bin(start).unwrap_or(0),
             seconds_to_bin(stop).unwrap_or(u32::MAX),
         )
+    } else if geometry.anchor_at_zero {
+        (0, natural_stop)
     } else {
         (resource.t_min, natural_stop)
     };
@@ -289,7 +355,13 @@ fn region_prints(
             "window contains no stored time range for {key:?}"
         )));
     }
-    let region_bins = (REGION_SECONDS / TIME_BIN_SECONDS) as u32;
+    let region_bins = (geometry.window_seconds / TIME_BIN_SECONDS) as u32;
+    let hop_bins = (geometry.hop_seconds / TIME_BIN_SECONDS) as u32;
+    if region_bins == 0 || hop_bins == 0 {
+        return Err(Error::Internal(
+            "query region geometry is below one time bin".into(),
+        ));
+    }
     let mut regions = Vec::new();
     let mut cursor = start;
     while cursor < stop {
@@ -298,7 +370,7 @@ fn region_prints(
         if !prints.is_empty() {
             regions.push(prints);
         }
-        cursor = region_stop;
+        cursor = cursor.saturating_add(hop_bins);
     }
     if regions.is_empty() {
         return Err(Error::BadRequest(format!(

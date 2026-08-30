@@ -94,11 +94,14 @@ than applying `crosscheck`'s ranking limit. Both retain store generations and en
 hashes so a consumer can bank immutable observations and supersede them after audio or algorithm
 changes without re-extracting fingerprints.
 
-Passage construction first turns each accepted line's filtered hits into evidence-dense support
-runs. A run breaks when either clock goes more than 1.5 seconds without another filtered hit.
+The `passage-v2` question geometry is the production identify geometry: 12-second regions every
+8 seconds, anchored at zero. Compatibility `span`/`crosscheck` retain their original non-overlapping
+30-second regions. Passage construction deduplicates exact filtered hits repeated by overlapping
+regions, then turns them into evidence-dense support runs. A run breaks when either clock goes more
+than 1.5 seconds without another filtered hit.
 Region-local lines join one alignment track only when both clocks move forward, their envelope gap
 is at most 20 seconds, the endpoint offset changes by at most 2 seconds, and time/pitch factors move
-by at most 0.03. Those constants define `passage-v1`; changing one requires a new profile. A stitched
+by at most 0.03. Those constants define `passage-v2`; changing one requires a new profile. A stitched
 envelope may contain a hole, but that hole remains visible between support entries and is never
 reported as matched audio.
 
@@ -106,6 +109,10 @@ The result is deliberately directional and non-exclusive. It proves that the mat
 is present at the reported support; it neither treats missing reverse evidence as a rejection nor
 claims that another simultaneous component is absent. Corpus-global recurrence classes, names,
 human decisions, and typed timeline containment stay outside resident.
+
+Passage endpoint hashes cover canonical stored fingerprints only. Duration is separately mutable
+resource metadata: Panako's cached-store path can overwrite it with a constant, and correcting that
+fact must not change passage identity.
 
 ## Process edge
 

@@ -110,6 +110,12 @@ enum Command {
         b_store: Option<PathBuf>,
         #[arg(long)]
         a_key: String,
+        /// Restrict discovery to these target keys. Repeat for multiple resources.
+        #[arg(long = "target")]
+        targets: Vec<String>,
+        /// Omit a caller-known sibling encoding of the same logical audio revision.
+        #[arg(long = "exclude-key")]
+        exclude_keys: Vec<String>,
         #[arg(long, requires = "stop")]
         start: Option<f64>,
         #[arg(long, requires = "start")]
@@ -281,6 +287,8 @@ fn main() -> anyhow::Result<()> {
             store,
             b_store,
             a_key,
+            targets,
+            exclude_keys,
             start,
             stop,
             evidence,
@@ -293,7 +301,8 @@ fn main() -> anyhow::Result<()> {
                 target_store,
                 &a_key,
                 start.zip(stop),
-                None,
+                (!targets.is_empty()).then_some(targets.as_slice()),
+                (!exclude_keys.is_empty()).then_some(exclude_keys.as_slice()),
                 evidence,
             )?;
             println!("{}", serde_json::to_string_pretty(&answer)?);
