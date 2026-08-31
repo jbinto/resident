@@ -11,6 +11,8 @@ out wrong, the engine says so loudly instead of approximating.
   orders); generation swap; retire.
 - Verbs: ping · match · span · crosscheck · passages · discover · ingest · retire · stats · extract · enroll
   (CONTRACT.md).
+- Offline `rehash-identities` maintenance publishes prints-only endpoint identities without
+  rewriting fingerprints or exposing a concurrent daemon mutation.
 - Fixture verification harness (`verify`).
 - Opt-in ranked multi-line emission for `match`, `span`, and `crosscheck`; absent/false retains
   jar single-line parity and original region behavior.

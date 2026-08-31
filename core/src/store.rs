@@ -17,6 +17,7 @@ const HEADER_SIZE: u64 = 128;
 const FORWARD_SIZE: u64 = 20;
 const HASH_INDEX_SIZE: u64 = 24;
 const HIT_SIZE: u64 = 12;
+const FINGERPRINT_IDENTITY_PROFILE: &str = "prints-v1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResourceInfo {
@@ -44,6 +45,8 @@ struct Manifest {
     version: u32,
     generation: String,
     config_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fingerprint_identity_profile: Option<String>,
     shard_count: u32,
     resources: Vec<ResourceInfo>,
     shards: Vec<ShardInfo>,
@@ -54,8 +57,16 @@ pub struct StoreStats {
     pub path: PathBuf,
     pub generation: String,
     pub config_id: String,
+    pub fingerprint_identity_profile: Option<String>,
     pub resources: usize,
     pub postings: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IdentityRehashStats {
+    pub previous_generation: String,
+    pub generation: String,
+    pub resources_changed: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -147,11 +158,13 @@ impl Store {
             resource_infos.append(&mut infos);
         }
         resource_infos.sort_by_key(|resource| resource.id);
-        let generation = generation_id_from_infos(&resource_infos);
+        let identity_profile = Some(FINGERPRINT_IDENTITY_PROFILE.to_owned());
+        let generation = generation_id_from_infos(&resource_infos, identity_profile.as_deref());
         let manifest = Manifest {
             version: STORE_VERSION,
             generation: generation.clone(),
             config_id: config_id(),
+            fingerprint_identity_profile: identity_profile,
             shard_count: SHARD_COUNT,
             resources: resource_infos,
             shards: shard_infos,
@@ -307,6 +320,50 @@ impl Store {
         ))
     }
 
+    /// Publish a manifest whose endpoint identities cover only canonical `(hash,t,f)` postings.
+    /// Shard bytes are reused; this operation neither extracts nor rewrites fingerprints.
+    pub fn rehash_identities(root: &Path) -> Result<(Self, IdentityRehashStats)> {
+        let current = Self::open(root)?;
+        let previous_generation = current.manifest.generation.clone();
+        let mut manifest = current.manifest.clone();
+        let mut resources_changed = 0;
+        for resource in &mut manifest.resources {
+            let corrected = fingerprint_content_hash(&current.forward(&resource.key, None)?);
+            if resource.content_hash != corrected {
+                resource.content_hash = corrected;
+                resources_changed += 1;
+            }
+        }
+        let profile_changed =
+            manifest.fingerprint_identity_profile.as_deref() != Some(FINGERPRINT_IDENTITY_PROFILE);
+        manifest.fingerprint_identity_profile = Some(FINGERPRINT_IDENTITY_PROFILE.to_owned());
+        manifest.generation = generation_id_from_infos(
+            &manifest.resources,
+            manifest.fingerprint_identity_profile.as_deref(),
+        );
+        let published = resources_changed != 0 || profile_changed;
+        if published {
+            publish_manifest(root, &manifest)?;
+        }
+        let store = if published {
+            // Each generation maps all 64 shards; release the previous view before opening the
+            // replacement so a low file-descriptor ceiling cannot make publication look failed.
+            drop(current);
+            Self::open(root)?
+        } else {
+            current
+        };
+        let generation = store.manifest.generation.clone();
+        Ok((
+            store,
+            IdentityRehashStats {
+                previous_generation,
+                generation,
+                resources_changed,
+            },
+        ))
+    }
+
     pub fn open(root: &Path) -> Result<Self> {
         let current_path = root.join("CURRENT");
         let current = fs::read_to_string(&current_path).map_err(|source| {
@@ -336,6 +393,13 @@ impl Store {
                 expected: expected_config,
                 found: manifest.config_id,
             });
+        }
+        if let Some(profile) = &manifest.fingerprint_identity_profile
+            && profile != FINGERPRINT_IDENTITY_PROFILE
+        {
+            return Err(Error::InvalidStore(format!(
+                "unknown fingerprint identity profile {profile:?}"
+            )));
         }
         if manifest.shard_count != SHARD_COUNT || manifest.shards.len() != SHARD_COUNT as usize {
             return Err(Error::InvalidStore(format!(
@@ -379,6 +443,7 @@ impl Store {
             path: self.root.clone(),
             generation: self.manifest.generation.clone(),
             config_id: self.manifest.config_id.clone(),
+            fingerprint_identity_profile: self.manifest.fingerprint_identity_profile.clone(),
             resources: self.manifest.resources.len(),
             postings: self
                 .manifest
@@ -414,6 +479,11 @@ impl Store {
     /// Identity of the stored fingerprint vector only. Duration is mutable metadata and Panako's
     /// cached-store path is known to corrupt it; passage identity must survive a metadata repair.
     pub fn fingerprint_content_hash(&self, key: &str) -> Result<String> {
+        if self.manifest.fingerprint_identity_profile.as_deref()
+            == Some(FINGERPRINT_IDENTITY_PROFILE)
+        {
+            return Ok(self.resource(key)?.content_hash.clone());
+        }
         Ok(fingerprint_content_hash(&self.forward(key, None)?))
     }
 
@@ -486,7 +556,10 @@ impl Store {
             manifest.resources.append(&mut infos);
         }
         manifest.resources.sort_by_key(|resource| resource.id);
-        manifest.generation = generation_id_from_infos(&manifest.resources);
+        manifest.generation = generation_id_from_infos(
+            &manifest.resources,
+            manifest.fingerprint_identity_profile.as_deref(),
+        );
         Ok(manifest)
     }
 
@@ -837,9 +910,10 @@ fn sync_directory(path: &Path) -> Result<()> {
         .map_err(|source| Error::io(path, source))
 }
 
-fn generation_id_from_infos(resources: &[ResourceInfo]) -> String {
+fn generation_id_from_infos(resources: &[ResourceInfo], identity_profile: Option<&str>) -> String {
     let mut digest = Sha256::new();
     digest.update(config_id());
+    digest.update(identity_profile.unwrap_or("legacy-duration-v0"));
     for resource in resources {
         digest.update(resource.id.to_le_bytes());
         digest.update(resource.key.as_bytes());
@@ -923,8 +997,12 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::ResourceMeta;
+
+    static STORE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn resource(key: &str, prints: &[(u64, u32, u16)]) -> DumpResource {
         DumpResource {
@@ -944,6 +1022,7 @@ mod tests {
 
     #[test]
     fn round_trips_both_access_orders() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
         let root = tempfile::tempdir().unwrap();
         let store = Store::build(
             root.path(),
@@ -980,6 +1059,7 @@ mod tests {
 
     #[test]
     fn ingest_is_idempotent_and_retire_removes_real_postings() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
         let root = tempfile::tempdir().unwrap();
         Store::build(
             root.path(),
@@ -997,5 +1077,61 @@ mod tests {
         assert_eq!(store.stats().postings, 1);
         assert!(matches!(store.resource("a"), Err(Error::BadRequest(_))));
         assert!(store.lookup(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn identity_rehash_reuses_shards_and_is_idempotent() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        Store::build(
+            root.path(),
+            vec![resource("a", &[(10, 1, 2)]), resource("b", &[(20, 3, 4)])],
+        )
+        .unwrap();
+        let current = fs::read_to_string(root.path().join("CURRENT")).unwrap();
+        let current_path = root.path().join("generations").join(current.trim());
+        let mut legacy: Manifest =
+            serde_json::from_slice(&fs::read(&current_path).unwrap()).unwrap();
+        let shard_files: Vec<_> = legacy
+            .shards
+            .iter()
+            .map(|shard| shard.file.clone())
+            .collect();
+        legacy.generation = "legacy-duration-hash".into();
+        legacy.fingerprint_identity_profile = None;
+        for resource in &mut legacy.resources {
+            resource.content_hash = format!("duration-coupled-{}", resource.key);
+        }
+        fs::write(
+            root.path()
+                .join("generations")
+                .join("legacy-duration-hash.json"),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+        fs::write(root.path().join("CURRENT"), "legacy-duration-hash.json\n").unwrap();
+
+        let (store, changed) = Store::rehash_identities(root.path()).unwrap();
+        assert_eq!(changed.previous_generation, "legacy-duration-hash");
+        assert_eq!(changed.resources_changed, 2);
+        assert_ne!(changed.generation, changed.previous_generation);
+        assert_eq!(store.resource("a").unwrap().duration, 10.0);
+        assert_eq!(
+            store.stats().fingerprint_identity_profile.as_deref(),
+            Some(FINGERPRINT_IDENTITY_PROFILE)
+        );
+        assert_eq!(
+            store
+                .manifest
+                .shards
+                .iter()
+                .map(|shard| shard.file.clone())
+                .collect::<Vec<_>>(),
+            shard_files
+        );
+
+        let (_, unchanged) = Store::rehash_identities(root.path()).unwrap();
+        assert_eq!(unchanged.resources_changed, 0);
+        assert_eq!(unchanged.previous_generation, unchanged.generation);
     }
 }

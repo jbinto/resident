@@ -56,6 +56,12 @@ content-addressed shard. The current and immediately previous manifest are retai
 unreferenced derived shards are removed after publication. Existing mappings remain valid on
 the Linux deployment target even when an old path is unlinked.
 
+Legacy manifests may contain duration-coupled endpoint hashes. `rehash-identities` scans each
+resource's forward postings, publishes a manifest marked `prints-v1`, and reuses every shard byte.
+Once marked, passage output can read the manifest hash directly; unmarked stores compute the same
+prints-only identity from forward postings for compatibility. Duration correction is a separate
+metadata operation and changes the store generation, never the endpoint fingerprint identity.
+
 ## Matching
 
 `core/src/matcher.rs` performs a ±2 hash lookup, groups hits by resource, fits Panako's

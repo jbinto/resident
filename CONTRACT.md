@@ -152,6 +152,14 @@ Unknown key: error `bad_request` (never a silent no-op).
 ### stats
 `{}` → store totals + per-resource `{key, duration, postings, t_min, t_max}` list.
 
+### operator-only identity rehash
+
+`resident rehash-identities --store PATH` is deliberately a CLI maintenance operation, not a daemon
+verb. It atomically republishes an unmarked legacy manifest with `prints-v1` hashes derived from
+stored `(hash,t,f)` postings, reusing all shard files. Output is
+`{"previous_generation":"...","generation":"...","resources_changed":N}`. Re-running it is a
+no-op with identical generations and zero changed resources. It does not change duration metadata.
+
 ### extract — audio in, prints out (the extraction lane; SPEC §extraction)
 `{"audio_path": "<file>"}` → `{"prints": [[hash, t, f], ...], "duration": s}`
 Decode+resample to the pinned 16 kHz mono front, then transform → events → triplets → hash.

@@ -337,3 +337,17 @@ both fingerprint extents, begins and ends within 2 seconds at zero offset, and h
 factors within 0.005. That signal pattern catches duplicate encodings before discovery ranking, but
 also describes deliberate full rebroadcasts. Only a corpus-owner ruling may turn the candidate into
 an excluded audio revision.
+
+## 2026-08-30 — repair legacy endpoint identity with a manifest-only rehash
+
+Mark new stores with the `prints-v1` fingerprint-identity profile. For an unmarked manifest,
+passage output continues computing the prints-only hash from forward postings so old duration rot
+cannot leak into new ids. Before a full bank, run the offline, idempotent `rehash-identities` command:
+it recomputes each endpoint hash, publishes an atomic profiled manifest, and reuses all shard files.
+After publication, endpoint identity is an O(1) manifest read.
+
+Do not fold duration correction into this step. First decouple and publish fingerprint identities;
+then replace the 1,498 rotten duration metadata values from authoritative audio probes in a later
+manifest-only metadata generation. That second publication changes the store generation for honest
+snapshot provenance but cannot change `content_hash` or passage ids. Keeping this operator-only
+avoids an in-place store mutation while a daemon has the old generation mapped.

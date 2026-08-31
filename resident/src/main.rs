@@ -131,6 +131,11 @@ enum Command {
         #[arg(long)]
         key: String,
     },
+    /// Publish prints-only endpoint identities without rewriting fingerprint shards.
+    RehashIdentities {
+        #[arg(long)]
+        store: PathBuf,
+    },
     /// Serve the v0 JSON-lines protocol over stdin/stdout.
     Daemon {
         #[arg(long)]
@@ -309,6 +314,10 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Retire { store, key } => {
             let (_, stats) = Store::retire(&store, &key)?;
+            println!("{}", serde_json::to_string_pretty(&stats)?);
+        }
+        Command::RehashIdentities { store } => {
+            let (_, stats) = Store::rehash_identities(&store)?;
             println!("{}", serde_json::to_string_pretty(&stats)?);
         }
         Command::Daemon { store } => daemon::run(store)?,

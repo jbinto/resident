@@ -36,6 +36,7 @@ cargo run --release -- passages \
   --store ./archive-store --a-key archive --b-key reference
 cargo run --release -- discover --store ./archive-store --a-key archive \
   --target reference --exclude-key sibling-encoding
+cargo run --release -- rehash-identities --store ./archive-store
 ```
 
 The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
@@ -55,6 +56,9 @@ drop is absent or classifying the residual as voice.
 Repeat `--target` for a bounded CLI fan-out. Repeat `--exclude-key` for curator-blessed alternate
 encodings of the source audio; fingerprints alone cannot distinguish those from a true rebroadcast,
 so unblessed near-total diagonals are reported as `same_audio_candidate` rather than silently hidden.
+`rehash-identities` is an offline, idempotent maintenance command: it republishes the manifest with
+prints-only endpoint hashes and reuses all fingerprint shards. Run it before banking passage ids from
+a legacy duration-coupled store; it does not repair duration metadata itself.
 `refingerprint` turns a JSONL manifest (`{"key":"...","audio_path":"..."}`) into a resumable
 Panako-grammar dump directory. It logs periodic progress to stderr, writes a JSON summary to
 stdout, and records non-fatal per-audio decode errors in `failures.jsonl`.
