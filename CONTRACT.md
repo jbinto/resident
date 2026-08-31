@@ -82,9 +82,10 @@ segment and to that reference's `score_total`.
 {"a_key": "...", "a_window": [t0, t1] | null, "b_key": "...",
  "b_store": "/optional/target/store", "evidence": false}
 ```
-→ `{"snapshot": {"profile":"passage-v2", "direction":"a_to_b", "config_id":"...",
+→ `{"snapshot": {"profile":"passage-v3", "direction":"a_to_b", "config_id":"...",
 "a_generation":"...", "b_generation":"...", "a_key":"...", "a_content_hash":"..."},
-"b_key":"...", "b_content_hash":"...", "passages":[...]}`
+"b_key":"...", "b_content_hash":"...", "passages":[...], "alternates":[...],
+"same_audio_candidate": {...} | absent}`
 
 Each passage has a deterministic `passage_id`, first-to-last `a_envelope`/`b_envelope`, explicit
 `support` spans on both clocks, and a `quality` vector. The vector reports peak line score,
@@ -99,6 +100,23 @@ The engine always uses evidence-bearing multiline matching internally. `evidence
 returns the accepted raw region `segments` for diagnosis; passage identity is unchanged by the flag.
 The request remains directional—A was probed against B—and absence of B→A is not negative evidence.
 
+`passages` contains the primary record-grained questions. If a line occupies at least 80% of its
+query envelope inside a primary with at least four times as many matched hits, it is retained in
+`alternates` with that primary's id instead of becoming another top-level question. This is
+presentation dominance, not rejection: equal-strength concurrent lines and lines outside the
+primary occupancy remain primary. Exact repeated hits from overlapping windows are deduplicated.
+
+Ordinary lines stitch across at most 20 seconds with the documented factor/offset tolerances. A
+tightly locked alignment (offset within 0.5 seconds and time/pitch factor changes within 0.01) may
+bridge up to 30 seconds, preserving the hole between `support` spans. This represents one continuing
+alignment with missing evidence, never matched audio inside the hole.
+
+`same_audio_candidate` marks a primary passage only when it supports at least 90% of both resources'
+fingerprint extents, starts and stops within 2 seconds at offset zero, and all time/pitch factor
+extrema are within 0.005 of 1. It is proposal-grade: the same signal facts can describe duplicate
+encodings or a deliberate full rebroadcast, so resident does not retire, merge, or exclude either
+resource automatically.
+
 ### discover — exhaustive directional passage fan-out
 ```
 {"a_key": "...", "a_window": [t0, t1] | null, "targets": "all" | ["key", ...],
@@ -106,14 +124,16 @@ The request remains directional—A was probed against B—and absence of B→A 
  "b_store": "/optional/target/store", "evidence": false}
 ```
 → `{"snapshot": {...as passages...}, "matches":[{"ref_key":"...",
-"ref_content_hash":"...", "passages":[...], "matched_hits":N,
+"ref_content_hash":"...", "passages":[...], "alternates":[...],
+"same_audio_candidate": {...} | absent, "matched_hits":N,
 "supported_seconds":s}, ...]}`
 
 Discovery applies no top-`k` truncation. Matches sort by supported seconds, then deduplicated hits
 and key; the exact self key plus caller-supplied exclusions are omitted. The CLI spells a bounded
 target set as repeated `--target KEY` and exclusions as repeated `--exclude-key KEY`. Resident
-cannot infer that differently encoded fingerprints are one logical audio revision; the caller must
-exclude every sibling key it already knows. Discovery is exhaustive only for the stated A→B
+cannot prove that differently encoded fingerprints are one logical audio revision; it marks strong
+same-audio candidates and the caller must exclude every sibling key it has already blessed.
+Discovery is exhaustive only for the stated A→B
 snapshot and target set.
 A corpus job that needs the union of both directions must also schedule corpus→A probes; reverse
 absence must never erase a surviving forward observation.

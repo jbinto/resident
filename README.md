@@ -47,13 +47,14 @@ ranked residual offset lines; their CLI equivalents use `--multi-line`. Ordinary
 proves 22/22 flag-off parity, while `validate-multiline` also drives a two-line fixture blend
 through stored-resource `span`.
 `passages` replays the production 12-second/8-second identify geometry and turns evidence-bearing
-lines into deterministic directional passage observations with explicit support gaps and quality
-facts. `discover` performs the same passage construction
+lines into deterministic directional passage observations with explicit support gaps, preserved
+alternate alignments, same-audio candidates, and quality facts. `discover` performs the same passage construction
 exhaustively across the target snapshot, without a top-`k` cutoff. Both are presence-only,
 non-exclusive evidence: they can identify a corpus song underneath a drop without claiming the
 drop is absent or classifying the residual as voice.
-Repeat `--target` for a bounded CLI fan-out. Repeat `--exclude-key` for caller-known alternate
-encodings of the source audio; fingerprints alone cannot distinguish those from a true rebroadcast.
+Repeat `--target` for a bounded CLI fan-out. Repeat `--exclude-key` for curator-blessed alternate
+encodings of the source audio; fingerprints alone cannot distinguish those from a true rebroadcast,
+so unblessed near-total diagonals are reported as `same_audio_candidate` rather than silently hidden.
 `refingerprint` turns a JSONL manifest (`{"key":"...","audio_path":"..."}`) into a resumable
 Panako-grammar dump directory. It logs periodic progress to stderr, writes a JSON summary to
 stdout, and records non-fatal per-audio decode errors in `failures.jsonl`.

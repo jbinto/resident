@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Error, EvidenceHit, Result, Segment, Store,
+    Error, EvidenceHit, ResourceInfo, Result, Segment, Store,
     span::{
         RegionGeometry, crosscheck_between_multiline_geometry, span_between_multiline_geometry,
     },
 };
 
-pub const PASSAGE_PROFILE: &str = "passage-v2";
+pub const PASSAGE_PROFILE: &str = "passage-v3";
 
 // Production identify artifacts used 12-second windows every 8 seconds. Passage mode replays that
 // geometry over stored prints; compatibility span/crosscheck keep their original 30-second regions.
@@ -25,9 +25,21 @@ const PASSAGE_GEOMETRY: RegionGeometry = RegionGeometry {
 // region-local lines may still be members of one geometric alignment family; it is never reported
 // as matched audio.
 const MAX_ALIGNMENT_GAP_SECONDS: f64 = 20.0;
+const MAX_LOCKED_ALIGNMENT_GAP_SECONDS: f64 = 30.0;
 const MAX_OFFSET_JUMP_SECONDS: f64 = 2.0;
+const MAX_LOCKED_OFFSET_JUMP_SECONDS: f64 = 0.5;
 const MAX_TIME_FACTOR_JUMP: f64 = 0.03;
 const MAX_PITCH_FACTOR_JUMP: f64 = 0.03;
+const MAX_LOCKED_FACTOR_JUMP: f64 = 0.01;
+
+// A much stronger passage owning the same query occupancy keeps weaker residual lines as alternates
+// rather than presenting them as additional passage questions.
+const ALTERNATE_QUERY_CONTAINMENT: f64 = 0.8;
+const ALTERNATE_HIT_DOMINANCE: usize = 4;
+
+const SAME_AUDIO_MIN_COVERAGE: f64 = 0.9;
+const SAME_AUDIO_MAX_EDGE_DELTA_SECONDS: f64 = 2.0;
+const SAME_AUDIO_MAX_FACTOR_DELTA: f64 = 0.005;
 
 // A support run is evidence-dense only while both clocks continue to receive filtered hits. Longer
 // holes are surfaced rather than filled by the first/last hit envelope.
@@ -88,11 +100,29 @@ pub struct Passage {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PassageAlternate {
+    pub primary_passage_id: String,
+    pub passage: Passage,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SameAudioCandidate {
+    pub passage_id: String,
+    pub a_fingerprint_coverage: f64,
+    pub b_fingerprint_coverage: f64,
+    pub start_delta: f64,
+    pub stop_delta: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PairPassages {
     pub snapshot: PassageSnapshot,
     pub b_key: String,
     pub b_content_hash: String,
     pub passages: Vec<Passage>,
+    pub alternates: Vec<PassageAlternate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_audio_candidate: Option<SameAudioCandidate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -100,6 +130,9 @@ pub struct PassageMatch {
     pub ref_key: String,
     pub ref_content_hash: String,
     pub passages: Vec<Passage>,
+    pub alternates: Vec<PassageAlternate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_audio_candidate: Option<SameAudioCandidate>,
     pub matched_hits: usize,
     pub supported_seconds: f64,
 }
@@ -132,7 +165,7 @@ pub fn passages_between(
     let a_content_hash = a_store.fingerprint_content_hash(a_key)?;
     let b_content_hash = b_store.fingerprint_content_hash(b_key)?;
     let snapshot = snapshot(a_store, b_store, a_key)?;
-    let passages = passages_from_segments(
+    let candidates = passages_from_segments(
         a_key,
         &a_content_hash,
         b_key,
@@ -141,11 +174,19 @@ pub fn passages_between(
         segments,
         include_segments,
     )?;
+    let (passages, alternates) = partition_passages(candidates);
+    let same_audio_candidate = same_audio_candidate(
+        &passages,
+        a_store.resource(a_key)?,
+        b_store.resource(b_key)?,
+    );
     Ok(PairPassages {
         snapshot,
         b_key: b_key.to_owned(),
         b_content_hash,
         passages,
+        alternates,
+        same_audio_candidate,
     })
 }
 
@@ -184,7 +225,7 @@ pub fn discover_passages_between(
             continue;
         }
         let b_content_hash = b_store.fingerprint_content_hash(&found.ref_key)?;
-        let passages = passages_from_segments(
+        let candidates = passages_from_segments(
             a_key,
             &a_content_hash,
             &found.ref_key,
@@ -193,9 +234,15 @@ pub fn discover_passages_between(
             found.segments,
             include_segments,
         )?;
+        let (passages, alternates) = partition_passages(candidates);
         if passages.is_empty() {
             continue;
         }
+        let same_audio_candidate = same_audio_candidate(
+            &passages,
+            a_store.resource(a_key)?,
+            b_store.resource(&found.ref_key)?,
+        );
         matches.push(PassageMatch {
             ref_key: found.ref_key,
             ref_content_hash: b_content_hash,
@@ -208,6 +255,8 @@ pub fn discover_passages_between(
                 .map(|passage| passage.quality.supported_seconds)
                 .sum(),
             passages,
+            alternates,
+            same_audio_candidate,
         });
     }
     matches.sort_by(|a, b| {
@@ -303,11 +352,128 @@ fn compatible(previous: &Segment, next: &Segment) -> bool {
     }
     let a_gap = (next.a_start - previous.a_stop).max(0.0);
     let b_gap = (next.b_start - previous.b_stop).max(0.0);
-    a_gap <= MAX_ALIGNMENT_GAP_SECONDS
+    let offset_jump = offset_jump(previous, next);
+    let time_factor_jump = (next.time_factor - previous.time_factor).abs();
+    let pitch_factor_jump = (next.pitch_factor - previous.pitch_factor).abs();
+    let ordinary = a_gap <= MAX_ALIGNMENT_GAP_SECONDS
         && b_gap <= MAX_ALIGNMENT_GAP_SECONDS
-        && offset_jump(previous, next) <= MAX_OFFSET_JUMP_SECONDS
-        && (next.time_factor - previous.time_factor).abs() <= MAX_TIME_FACTOR_JUMP
-        && (next.pitch_factor - previous.pitch_factor).abs() <= MAX_PITCH_FACTOR_JUMP
+        && offset_jump <= MAX_OFFSET_JUMP_SECONDS
+        && time_factor_jump <= MAX_TIME_FACTOR_JUMP
+        && pitch_factor_jump <= MAX_PITCH_FACTOR_JUMP;
+    let locked = a_gap <= MAX_LOCKED_ALIGNMENT_GAP_SECONDS
+        && b_gap <= MAX_LOCKED_ALIGNMENT_GAP_SECONDS
+        && offset_jump <= MAX_LOCKED_OFFSET_JUMP_SECONDS
+        && time_factor_jump <= MAX_LOCKED_FACTOR_JUMP
+        && pitch_factor_jump <= MAX_LOCKED_FACTOR_JUMP;
+    ordinary || locked
+}
+
+fn partition_passages(mut candidates: Vec<Passage>) -> (Vec<Passage>, Vec<PassageAlternate>) {
+    candidates.sort_by(|a, b| {
+        b.quality
+            .matched_hits
+            .cmp(&a.quality.matched_hits)
+            .then_with(|| {
+                b.quality
+                    .supported_seconds
+                    .total_cmp(&a.quality.supported_seconds)
+            })
+            .then_with(|| a.passage_id.cmp(&b.passage_id))
+    });
+    let mut primaries: Vec<Passage> = Vec::new();
+    let mut alternates = Vec::new();
+    for candidate in candidates {
+        let owner = primaries
+            .iter()
+            .filter(|primary| {
+                query_containment(primary, &candidate) >= ALTERNATE_QUERY_CONTAINMENT
+                    && primary.quality.matched_hits
+                        >= candidate
+                            .quality
+                            .matched_hits
+                            .saturating_mul(ALTERNATE_HIT_DOMINANCE)
+            })
+            .max_by(|a, b| {
+                query_containment(a, &candidate)
+                    .total_cmp(&query_containment(b, &candidate))
+                    .then_with(|| a.quality.matched_hits.cmp(&b.quality.matched_hits))
+            });
+        if let Some(primary) = owner {
+            alternates.push(PassageAlternate {
+                primary_passage_id: primary.passage_id.clone(),
+                passage: candidate,
+            });
+        } else {
+            primaries.push(candidate);
+        }
+    }
+    primaries.sort_by(passage_order);
+    alternates.sort_by(|a, b| passage_order(&a.passage, &b.passage));
+    (primaries, alternates)
+}
+
+fn passage_order(a: &Passage, b: &Passage) -> std::cmp::Ordering {
+    a.a_envelope[0]
+        .total_cmp(&b.a_envelope[0])
+        .then_with(|| a.b_envelope[0].total_cmp(&b.b_envelope[0]))
+        .then_with(|| a.passage_id.cmp(&b.passage_id))
+}
+
+fn query_containment(container: &Passage, candidate: &Passage) -> f64 {
+    let candidate_seconds = candidate.a_envelope[1] - candidate.a_envelope[0];
+    if candidate_seconds <= 0.0 {
+        return 0.0;
+    }
+    let overlap = (container.a_envelope[1].min(candidate.a_envelope[1])
+        - container.a_envelope[0].max(candidate.a_envelope[0]))
+    .max(0.0);
+    (overlap / candidate_seconds).clamp(0.0, 1.0)
+}
+
+fn same_audio_candidate(
+    passages: &[Passage],
+    a_resource: &ResourceInfo,
+    b_resource: &ResourceInfo,
+) -> Option<SameAudioCandidate> {
+    let a_extent = fingerprint_extent(a_resource);
+    let b_extent = fingerprint_extent(b_resource);
+    if a_extent <= 0.0 || b_extent <= 0.0 {
+        return None;
+    }
+    passages
+        .iter()
+        .filter_map(|passage| {
+            let a_coverage = passage.quality.supported_seconds / a_extent;
+            let b_coverage = passage.quality.supported_seconds / b_extent;
+            let start_delta = passage.b_envelope[0] - passage.a_envelope[0];
+            let stop_delta = passage.b_envelope[1] - passage.a_envelope[1];
+            let unit_factor = (passage.quality.time_factor_min - 1.0).abs()
+                <= SAME_AUDIO_MAX_FACTOR_DELTA
+                && (passage.quality.time_factor_max - 1.0).abs() <= SAME_AUDIO_MAX_FACTOR_DELTA
+                && (passage.quality.pitch_factor_min - 1.0).abs() <= SAME_AUDIO_MAX_FACTOR_DELTA
+                && (passage.quality.pitch_factor_max - 1.0).abs() <= SAME_AUDIO_MAX_FACTOR_DELTA;
+            (a_coverage >= SAME_AUDIO_MIN_COVERAGE
+                && b_coverage >= SAME_AUDIO_MIN_COVERAGE
+                && start_delta.abs() <= SAME_AUDIO_MAX_EDGE_DELTA_SECONDS
+                && stop_delta.abs() <= SAME_AUDIO_MAX_EDGE_DELTA_SECONDS
+                && unit_factor)
+                .then_some(SameAudioCandidate {
+                    passage_id: passage.passage_id.clone(),
+                    a_fingerprint_coverage: a_coverage.clamp(0.0, 1.0),
+                    b_fingerprint_coverage: b_coverage.clamp(0.0, 1.0),
+                    start_delta,
+                    stop_delta,
+                })
+        })
+        .max_by(|a, b| {
+            a.a_fingerprint_coverage
+                .min(a.b_fingerprint_coverage)
+                .total_cmp(&b.a_fingerprint_coverage.min(b.b_fingerprint_coverage))
+        })
+}
+
+fn fingerprint_extent(resource: &ResourceInfo) -> f64 {
+    f64::from(resource.t_max.saturating_sub(resource.t_min)) * crate::config::TIME_BIN_SECONDS
 }
 
 fn offset_jump(previous: &Segment, next: &Segment) -> f64 {
@@ -542,6 +708,20 @@ mod tests {
         passages_from_segments("a", "ah", "b", "bh", "config", segments, false).expect("passages")
     }
 
+    fn resource(key: &str, t_max: u32) -> ResourceInfo {
+        ResourceInfo {
+            id: 1,
+            key: key.to_owned(),
+            duration: f64::from(t_max) * crate::config::TIME_BIN_SECONDS,
+            postings: 1,
+            t_min: 0,
+            t_max,
+            content_hash: "hash".to_owned(),
+            shard: 0,
+            forward_start: 0,
+        }
+    }
+
     #[test]
     fn stitches_compatible_regions_but_keeps_the_unsupported_hole() {
         let found = passages(vec![
@@ -563,6 +743,64 @@ mod tests {
         ]);
         assert_eq!(found.len(), 2);
         assert_ne!(found[0].passage_id, found[1].passage_id);
+    }
+
+    #[test]
+    fn bridges_a_locked_offset_hole_but_not_a_longer_break() {
+        let locked = passages(vec![
+            segment(0.0, 100.0, &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
+            segment(26.0, 126.0, &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
+        ]);
+        assert_eq!(locked.len(), 1);
+        assert_eq!(locked[0].quality.largest_gap, 21.0);
+        assert_eq!(locked[0].support.len(), 2);
+
+        let broken = passages(vec![
+            segment(0.0, 100.0, &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
+            segment(36.0, 136.0, &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
+        ]);
+        assert_eq!(broken.len(), 2);
+    }
+
+    #[test]
+    fn weak_contained_alignment_is_an_alternate_not_another_question() {
+        let primary = segment(
+            0.0,
+            0.0,
+            &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+        );
+        let weak = segment(2.0, 100.0, &[0.0, 1.0, 2.0]);
+        let (primaries, alternates) = partition_passages(passages(vec![primary, weak]));
+        assert_eq!(primaries.len(), 1);
+        assert_eq!(alternates.len(), 1);
+        assert_eq!(alternates[0].primary_passage_id, primaries[0].passage_id);
+        assert_eq!(alternates[0].passage.b_envelope, [100.0, 102.0]);
+
+        let equal_strength = passages(vec![
+            segment(0.0, 0.0, &[0.0, 1.0, 2.0, 3.0]),
+            segment(0.0, 100.0, &[0.0, 1.0, 2.0, 3.0]),
+        ]);
+        let (primaries, alternates) = partition_passages(equal_strength);
+        assert_eq!(primaries.len(), 2);
+        assert!(alternates.is_empty());
+    }
+
+    #[test]
+    fn near_total_unit_diagonal_is_only_a_same_audio_candidate() {
+        let found = passages(vec![segment(
+            0.0,
+            0.0,
+            &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+        )]);
+        let bins = (10.0 / crate::config::TIME_BIN_SECONDS) as u32;
+        let candidate = same_audio_candidate(&found, &resource("a", bins), &resource("b", bins))
+            .expect("same-audio candidate");
+        assert_eq!(candidate.passage_id, found[0].passage_id);
+        assert_eq!(candidate.start_delta, 0.0);
+        assert_eq!(candidate.stop_delta, 0.0);
+
+        let short = passages(vec![segment(0.0, 0.0, &[0.0, 1.0, 2.0])]);
+        assert!(same_audio_candidate(&short, &resource("a", bins), &resource("b", bins)).is_none());
     }
 
     #[test]

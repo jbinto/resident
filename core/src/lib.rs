@@ -19,8 +19,9 @@ pub use extract::{
 pub use fingerprint::Fingerprint;
 pub use matcher::{DensityBin, Evidence, EvidenceHit, HistogramBin, MatchRow, Matcher};
 pub use passage::{
-    PASSAGE_PROFILE, PairPassages, Passage, PassageDiscovery, PassageMatch, PassageQuality,
-    PassageSnapshot, SupportSpan, discover_passages_between, passages_between,
+    PASSAGE_PROFILE, PairPassages, Passage, PassageAlternate, PassageDiscovery, PassageMatch,
+    PassageQuality, PassageSnapshot, SameAudioCandidate, SupportSpan, discover_passages_between,
+    passages_between,
 };
 pub use span::{
     CrosscheckMatch, Segment, crosscheck, crosscheck_between, crosscheck_between_multiline,

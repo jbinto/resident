@@ -317,3 +317,23 @@ query already names the target, look up each probe hash only in that shard and r
 hits; scanning the other 63 shards cannot add a valid hit. Fan-out keeps the all-shard path. This is
 an index-access optimization below the unchanged voter, with a unit comparison against all-shard
 lookup, and makes serial evidence-bearing cohort replay practical without changing answers.
+
+## 2026-08-30 — make record-grained dominance explicit in passage-v3
+
+Supersede `passage-v2` with `passage-v3` after production replay exposed residual multiline peels as
+additional questions inside a much stronger alignment. Keep a residual as an alternate when at least
+80% of its A envelope is contained by a primary with at least four times its matched hits. Do not
+discard it: retain its complete geometry under the primary id because it may be a real simultaneous
+layer. Equal-strength competitors, partial overlaps, and non-contained lines remain primary.
+
+Bridge support holes from 20 through 30 seconds only for a locked continuation: endpoint offset may
+move by at most 0.5 seconds and time/pitch factors by at most 0.01. The Wefunk 0694→0232 replay has a
+21-second talk-over hole on a continuing offset ramp and should stay one passage with an explicit
+hole; Wefunk 0229→0232 has a roughly 45-second break and must stay two. Joining longer or less stable
+gaps belongs to corpus concordance, not pairwise signal geometry.
+
+Mark, but never silently exclude, a same-audio candidate when one primary supports at least 90% of
+both fingerprint extents, begins and ends within 2 seconds at zero offset, and has unit time/pitch
+factors within 0.005. That signal pattern catches duplicate encodings before discovery ranking, but
+also describes deliberate full rebroadcasts. Only a corpus-owner ruling may turn the candidate into
+an excluded audio revision.

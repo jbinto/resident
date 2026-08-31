@@ -98,16 +98,25 @@ than applying `crosscheck`'s ranking limit. Both retain store generations and en
 hashes so a consumer can bank immutable observations and supersede them after audio or algorithm
 changes without re-extracting fingerprints.
 
-The `passage-v2` question geometry is the production identify geometry: 12-second regions every
+The `passage-v3` question geometry is the production identify geometry: 12-second regions every
 8 seconds, anchored at zero. Compatibility `span`/`crosscheck` retain their original non-overlapping
 30-second regions. Passage construction deduplicates exact filtered hits repeated by overlapping
 regions, then turns them into evidence-dense support runs. A run breaks when either clock goes more
 than 1.5 seconds without another filtered hit.
-Region-local lines join one alignment track only when both clocks move forward, their envelope gap
-is at most 20 seconds, the endpoint offset changes by at most 2 seconds, and time/pitch factors move
-by at most 0.03. Those constants define `passage-v2`; changing one requires a new profile. A stitched
+Region-local lines join one alignment track only when both clocks move forward. The ordinary rule
+allows an envelope gap of at most 20 seconds, endpoint-offset change of at most 2 seconds, and
+time/pitch-factor changes of at most 0.03. A locked continuation may bridge a 30-second hole only
+when offset changes by at most 0.5 seconds and both factors by at most 0.01. Those constants define
+`passage-v3`; changing one requires a new profile. A stitched
 envelope may contain a hole, but that hole remains visible between support entries and is never
 reported as matched audio.
+
+Passages are then partitioned into top-level questions and preserved alternate alignments. A
+candidate whose query envelope is at least 80% contained by a passage with at least four times its
+matched hits becomes that passage's alternate. Strong competing layers, partial overlaps, and
+non-contained alignments stay top-level. A near-total, zero-offset, unit-factor diagonal is marked as
+a `same_audio_candidate`; it is not automatically excluded because signal evidence cannot distinguish
+an encoding revision from an intentional full rebroadcast.
 
 The result is deliberately directional and non-exclusive. It proves that the matched corpus audio
 is present at the reported support; it neither treats missing reverse evidence as a rejection nor
