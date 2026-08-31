@@ -236,7 +236,15 @@ impl Store {
                 .get(&resource.meta.key)
                 .map(|index| &current.manifest.resources[*index])
             {
-                if existing.content_hash == content_hash {
+                let existing_content_hash =
+                    if current.manifest.fingerprint_identity_profile.as_deref()
+                        == Some(FINGERPRINT_IDENTITY_PROFILE)
+                    {
+                        existing.content_hash.clone()
+                    } else {
+                        current.fingerprint_content_hash(&resource.meta.key)?
+                    };
+                if existing_content_hash == content_hash {
                     resources_unchanged += 1;
                     continue;
                 }
@@ -1110,6 +1118,11 @@ mod tests {
         )
         .unwrap();
         fs::write(root.path().join("CURRENT"), "legacy-duration-hash.json\n").unwrap();
+
+        let (_, unchanged) =
+            Store::ingest(root.path(), vec![resource("a", &[(10, 1, 2)])], false).unwrap();
+        assert_eq!(unchanged.resources_unchanged, 1);
+        assert_eq!(unchanged.postings_added, 0);
 
         let (store, changed) = Store::rehash_identities(root.path()).unwrap();
         assert_eq!(changed.previous_generation, "legacy-duration-hash");
