@@ -516,6 +516,25 @@ impl Store {
         Ok(hits)
     }
 
+    /// Whether the compatibility lookup range occurs anywhere in the store. Pair matching needs
+    /// this global shape to reproduce Panako's hash-map iteration capacity, even though only the
+    /// named target's postings may enter its voter.
+    pub fn has_match(&self, hash: u64) -> Result<bool> {
+        if hash > MAX_HASH {
+            return Err(Error::BadRequest(format!("hash {hash} exceeds 34 bits")));
+        }
+        let start = hash.saturating_sub(crate::config::QUERY_RANGE);
+        let stop = hash
+            .saturating_add(crate::config::QUERY_RANGE)
+            .min(MAX_HASH);
+        for shard in &self.shards {
+            if shard.has_range(start, stop)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Look up one hash only in the shard that owns a known target resource. Every posting for a
     /// resource lives in its key-selected shard, so pair queries need not scan the other 63 shards.
     pub fn lookup_resource(&self, hash: u64, resource_id: u32) -> Result<Vec<StoredHit>> {
@@ -683,17 +702,7 @@ impl Shard {
     }
 
     fn lookup_range(&self, start: u64, stop: u64, out: &mut Vec<StoredHit>) -> Result<()> {
-        let mut low = 0;
-        let mut high = self.hash_count;
-        while low < high {
-            let middle = low + (high - low) / 2;
-            if self.index_hash(middle)? < start {
-                low = middle + 1;
-            } else {
-                high = middle;
-            }
-        }
-        let mut index = low;
+        let mut index = self.lower_bound(start)?;
         while index < self.hash_count {
             let base = self.hash_index_offset + index * HASH_INDEX_SIZE;
             let hash = read_u64(&self.map, base as usize)?;
@@ -720,6 +729,25 @@ impl Shard {
             index += 1;
         }
         Ok(())
+    }
+
+    fn has_range(&self, start: u64, stop: u64) -> Result<bool> {
+        let index = self.lower_bound(start)?;
+        Ok(index < self.hash_count && self.index_hash(index)? <= stop)
+    }
+
+    fn lower_bound(&self, hash: u64) -> Result<u64> {
+        let mut low = 0;
+        let mut high = self.hash_count;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if self.index_hash(middle)? < hash {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        Ok(low)
     }
 
     fn index_hash(&self, index: u64) -> Result<u64> {
@@ -1046,6 +1074,8 @@ mod tests {
         );
         let hits = store.lookup(100).unwrap();
         assert_eq!(hits.len(), 4);
+        assert!(store.has_match(100).unwrap());
+        assert!(!store.has_match(MAX_HASH).unwrap());
         let a_id = store.resource("a").unwrap().id;
         assert_eq!(
             store.lookup_resource(100, a_id).unwrap(),

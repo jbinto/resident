@@ -351,3 +351,15 @@ then replace the 1,498 rotten duration metadata values from authoritative audio 
 manifest-only metadata generation. That second publication changes the store generation for honest
 snapshot provenance but cannot change `content_hash` or passage ids. Keeping this operator-only
 avoids an in-place store mutation while a daemon has the old generation mapped.
+
+## 2026-08-30 — preserve global hash-map shape in pair lookup
+
+Refine the target-shard optimization after production C1 replay found a one-line divergence. The
+target's postings are shard-local, but Panako compatibility also emulates Java `HashMap` iteration
+capacity using every probe hash whose ±2 range exists anywhere in the store. Other-resource hits are
+filtered before voting, yet their existence can still break a modal tie by changing that capacity.
+
+For a named pair, materialize postings only from the target shard but probe every shard's compact
+hash index for range presence. Retain globally present hashes—including those with no target hit—when
+calculating iteration capacity. This keeps the optimization's main benefit (no unrelated posting
+fan-out) while restoring exact accepted-line equivalence with the all-shard path.

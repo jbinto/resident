@@ -151,24 +151,29 @@ impl<'a> Matcher<'a> {
         let mut hashes: Vec<_> = multiplicity.keys().copied().collect();
         hashes.sort_unstable();
 
-        let lookups: Vec<Result<(u64, Vec<StoredHit>)>> = hashes
+        let lookups: Vec<Result<(u64, Vec<StoredHit>, bool)>> = hashes
             .par_iter()
             .map(|&hash| {
-                only_resource
-                    .map_or_else(
-                        || self.store.lookup(hash),
-                        |resource_id| self.store.lookup_resource(hash, resource_id),
-                    )
-                    .map(|hits| (hash, hits))
+                let hits = only_resource.map_or_else(
+                    || self.store.lookup(hash),
+                    |resource_id| self.store.lookup_resource(hash, resource_id),
+                )?;
+                let global_present = if only_resource.is_some() {
+                    self.store.has_match(hash)?
+                } else {
+                    !hits.is_empty()
+                };
+                Ok((hash, hits, global_present))
             })
             .collect();
         let mut lookups: Vec<_> = lookups.into_iter().collect::<Result<Vec<_>>>()?;
-        lookups.retain(|(_, hits)| !hits.is_empty());
+        lookups.retain(|(_, _, global_present)| *global_present);
         let capacity = java_hash_map_capacity(lookups.len());
-        lookups
-            .sort_by_key(|(hash, _)| (java_long_bucket(*hash, capacity), first_occurrence[hash]));
+        lookups.sort_by_key(|(hash, _, _)| {
+            (java_long_bucket(*hash, capacity), first_occurrence[hash])
+        });
         let mut by_resource = HashMap::<u32, Vec<Hit>>::new();
-        for (hash, stored_hits) in lookups {
+        for (hash, stored_hits, _) in lookups {
             let query = last_print[&hash];
             let copies = multiplicity[&hash];
             for stored in stored_hits {

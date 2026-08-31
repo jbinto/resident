@@ -43,9 +43,11 @@ The forward range for each resource is recorded in the manifest. A hash lookup b
 each shard index and reads only matching hit ranges. The fixture generation is 168 MiB for
 3,208,323 postings, which projects to about 21 GiB at production count.
 
-A pair-restricted match resolves the target resource's key-selected shard first and looks up hashes
-only there, filtering other resources that share the shard. Unrestricted fan-out still searches all
-64 shards. Both paths feed the same voter and return identical target hits.
+A pair-restricted match materializes hits only from the target resource's key-selected shard,
+filtering other resources that share it. It also probes the 64 hash indexes for global range
+presence: Panako-compatible iteration order depends on the global matching-hash count even though
+unrelated hits never enter the target voter. Unrestricted fan-out materializes all matching hits.
+Both paths therefore feed the same ordered target hits to the voter.
 
 `core/src/mmap_view.rs` is the sole unsafe-code exception. Its invariant is that published
 shard paths are immutable and the backing file remains open for the mapping's lifetime.
