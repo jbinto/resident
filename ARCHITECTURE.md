@@ -43,6 +43,10 @@ The forward range for each resource is recorded in the manifest. A hash lookup b
 each shard index and reads only matching hit ranges. The fixture generation is 168 MiB for
 3,208,323 postings, which projects to about 21 GiB at production count.
 
+A pair-restricted match resolves the target resource's key-selected shard first and looks up hashes
+only there, filtering other resources that share the shard. Unrestricted fan-out still searches all
+64 shards. Both paths feed the same voter and return identical target hits.
+
 `core/src/mmap_view.rs` is the sole unsafe-code exception. Its invariant is that published
 shard paths are immutable and the backing file remains open for the mapping's lifetime.
 

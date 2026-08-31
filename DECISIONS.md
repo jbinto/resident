@@ -309,3 +309,11 @@ Hash canonical `(hash,t,f)` postings only. Duration is useful resource metadata 
 fingerprint fact nor match identity; repairing it must not churn passage ids. Old manifests retain
 their historical hash bytes, so passage output computes the prints-only endpoint hash from forward
 postings until a manifest-only rehash publishes the corrected identity profile.
+
+## 2026-08-30 — restrict pair lookups to the target shard
+
+Every resource's forward and inverted postings live in the shard selected by its key. When a pair
+query already names the target, look up each probe hash only in that shard and retain that resource's
+hits; scanning the other 63 shards cannot add a valid hit. Fan-out keeps the all-shard path. This is
+an index-access optimization below the unchanged voter, with a unit comparison against all-shard
+lookup, and makes serial evidence-bearing cohort replay practical without changing answers.

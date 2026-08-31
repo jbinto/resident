@@ -153,7 +153,14 @@ impl<'a> Matcher<'a> {
 
         let lookups: Vec<Result<(u64, Vec<StoredHit>)>> = hashes
             .par_iter()
-            .map(|&hash| self.store.lookup(hash).map(|hits| (hash, hits)))
+            .map(|&hash| {
+                only_resource
+                    .map_or_else(
+                        || self.store.lookup(hash),
+                        |resource_id| self.store.lookup_resource(hash, resource_id),
+                    )
+                    .map(|hits| (hash, hits))
+            })
             .collect();
         let mut lookups: Vec<_> = lookups.into_iter().collect::<Result<Vec<_>>>()?;
         lookups.retain(|(_, hits)| !hits.is_empty());

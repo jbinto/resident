@@ -438,6 +438,23 @@ impl Store {
         Ok(hits)
     }
 
+    /// Look up one hash only in the shard that owns a known target resource. Every posting for a
+    /// resource lives in its key-selected shard, so pair queries need not scan the other 63 shards.
+    pub fn lookup_resource(&self, hash: u64, resource_id: u32) -> Result<Vec<StoredHit>> {
+        if hash > MAX_HASH {
+            return Err(Error::BadRequest(format!("hash {hash} exceeds 34 bits")));
+        }
+        let resource = self.resource_by_id(resource_id)?;
+        let start = hash.saturating_sub(crate::config::QUERY_RANGE);
+        let stop = hash
+            .saturating_add(crate::config::QUERY_RANGE)
+            .min(MAX_HASH);
+        let mut hits = Vec::new();
+        self.shards[resource.shard as usize].lookup_range(start, stop, &mut hits)?;
+        hits.retain(|hit| hit.resource_id == resource_id);
+        Ok(hits)
+    }
+
     fn rebuild_changed_shards(
         &self,
         affected: &std::collections::BTreeSet<u32>,
@@ -942,6 +959,13 @@ mod tests {
         );
         let hits = store.lookup(100).unwrap();
         assert_eq!(hits.len(), 4);
+        let a_id = store.resource("a").unwrap().id;
+        assert_eq!(
+            store.lookup_resource(100, a_id).unwrap(),
+            hits.into_iter()
+                .filter(|hit| hit.resource_id == a_id)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(store.stats().postings, 4);
     }
 
