@@ -63,6 +63,9 @@ resource's forward postings, publishes a manifest marked `prints-v1`, and reuses
 Once marked, passage output can read the manifest hash directly; unmarked stores compute the same
 prints-only identity from forward postings for compatibility. Duration correction is a separate
 metadata operation and changes the store generation, never the endpoint fingerprint identity.
+`set-durations` performs that metadata publication only after a complete, expected-generation-pinned
+JSONL map passes extent plausibility checks. It edits cloned manifest durations, reuses every shard,
+atomically publishes, reopens, and compares all immutable resource facts as a postcondition.
 
 ## Matching
 

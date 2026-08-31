@@ -18,6 +18,9 @@ const FORWARD_SIZE: u64 = 20;
 const HASH_INDEX_SIZE: u64 = 24;
 const HIT_SIZE: u64 = 12;
 const FINGERPRINT_IDENTITY_PROFILE: &str = "prints-v1";
+const DURATION_EARLY_TOLERANCE_SECONDS: f64 = 1.0;
+const DURATION_TRAILING_MIN_SECONDS: f64 = 10.0;
+const DURATION_TRAILING_FRACTION: f64 = 0.01;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResourceInfo {
@@ -69,6 +72,21 @@ pub struct IdentityRehashStats {
     pub resources_changed: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DurationUpdate {
+    pub key: String,
+    pub duration_seconds: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DurationPublishStats {
+    pub previous_generation: String,
+    pub generation: String,
+    pub resources_changed: usize,
+    pub content_hashes_unchanged: bool,
+    pub shards_reused: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct IngestStats {
     pub generation: String,
@@ -116,6 +134,18 @@ struct FullPosting {
     resource_id: u32,
     t: u32,
     f: u16,
+}
+
+#[derive(PartialEq, Eq)]
+struct ImmutableResourceFacts {
+    id: u32,
+    key: String,
+    postings: u64,
+    t_min: u32,
+    t_max: u32,
+    content_hash: String,
+    shard: u32,
+    forward_start: u64,
 }
 
 impl Store {
@@ -368,6 +398,135 @@ impl Store {
                 previous_generation,
                 generation,
                 resources_changed,
+            },
+        ))
+    }
+
+    /// Atomically publish authoritative duration metadata without changing fingerprint identity or
+    /// shard bytes. The caller must first move a legacy store to the prints-only identity profile.
+    pub fn set_durations(
+        root: &Path,
+        expected_generation: &str,
+        updates: Vec<DurationUpdate>,
+    ) -> Result<(Self, DurationPublishStats)> {
+        let current = Self::open(root)?;
+        let previous_generation = current.manifest.generation.clone();
+        if previous_generation != expected_generation {
+            return Err(Error::BadRequest(format!(
+                "expected store generation {expected_generation:?}, current generation is {previous_generation:?}"
+            )));
+        }
+        if current.manifest.fingerprint_identity_profile.as_deref()
+            != Some(FINGERPRINT_IDENTITY_PROFILE)
+        {
+            return Err(Error::BadRequest(
+                "set-durations requires a prints-v1 manifest; run rehash-identities first".into(),
+            ));
+        }
+
+        let mut by_key = BTreeMap::new();
+        for update in updates {
+            if !update.duration_seconds.is_finite() || update.duration_seconds <= 0.0 {
+                return Err(Error::BadRequest(format!(
+                    "duration for {:?} must be finite and greater than zero",
+                    update.key
+                )));
+            }
+            if by_key
+                .insert(update.key.clone(), update.duration_seconds)
+                .is_some()
+            {
+                return Err(Error::BadRequest(format!(
+                    "duplicate duration key {:?}",
+                    update.key
+                )));
+            }
+        }
+
+        let unknown: Vec<_> = by_key
+            .keys()
+            .filter(|key| !current.resources_by_key.contains_key(key.as_str()))
+            .cloned()
+            .collect();
+        if !unknown.is_empty() {
+            return Err(Error::BadRequest(format!(
+                "duration input contains unknown keys: {}",
+                summarize_keys(&unknown)
+            )));
+        }
+        let missing: Vec<_> = current
+            .manifest
+            .resources
+            .iter()
+            .filter(|resource| !by_key.contains_key(&resource.key))
+            .map(|resource| resource.key.clone())
+            .collect();
+        if !missing.is_empty() {
+            return Err(Error::BadRequest(format!(
+                "duration input is missing manifest keys: {}",
+                summarize_keys(&missing)
+            )));
+        }
+
+        let identity_before = immutable_resource_facts(&current.manifest.resources);
+        let shards_before: Vec<_> = current
+            .manifest
+            .shards
+            .iter()
+            .map(|shard| shard.file.clone())
+            .collect();
+        let mut manifest = current.manifest.clone();
+        let mut resources_changed = 0;
+        for resource in &mut manifest.resources {
+            let duration = by_key[&resource.key];
+            validate_duration(resource, duration)?;
+            if resource.duration.to_bits() != duration.to_bits() {
+                resource.duration = duration;
+                resources_changed += 1;
+            }
+        }
+        if resources_changed == 0 {
+            return Ok((
+                current,
+                DurationPublishStats {
+                    previous_generation: previous_generation.clone(),
+                    generation: previous_generation,
+                    resources_changed: 0,
+                    content_hashes_unchanged: true,
+                    shards_reused: true,
+                },
+            ));
+        }
+
+        manifest.generation = generation_id_from_infos(
+            &manifest.resources,
+            manifest.fingerprint_identity_profile.as_deref(),
+        );
+        publish_manifest(root, &manifest)?;
+        drop(current);
+        let store = Self::open(root)?;
+        let content_hashes_unchanged =
+            immutable_resource_facts(&store.manifest.resources) == identity_before;
+        let shards_reused = store
+            .manifest
+            .shards
+            .iter()
+            .map(|shard| shard.file.as_str())
+            .eq(shards_before.iter().map(String::as_str));
+        if !content_hashes_unchanged || !shards_reused {
+            return Err(Error::Internal(
+                "duration publication changed fingerprint identity or shard references".into(),
+            ));
+        }
+        let generation = store.manifest.generation.clone();
+        Ok((
+            store,
+            DurationPublishStats {
+                previous_generation,
+                generation,
+                resources_changed,
+                content_hashes_unchanged,
+                shards_reused,
             },
         ))
     }
@@ -959,6 +1118,71 @@ fn generation_id_from_infos(resources: &[ResourceInfo], identity_profile: Option
     hex::encode(digest.finalize())[..24].to_owned()
 }
 
+fn validate_duration(resource: &ResourceInfo, duration: f64) -> Result<()> {
+    if resource.postings == 0 {
+        if resource.t_min != 0 || resource.t_max != 0 {
+            return Err(Error::InvalidStore(format!(
+                "zero-posting resource {:?} has a nonzero fingerprint extent",
+                resource.key
+            )));
+        }
+        return Ok(());
+    }
+    if resource.t_min > resource.t_max {
+        return Err(Error::InvalidStore(format!(
+            "resource {:?} has t_min greater than t_max",
+            resource.key
+        )));
+    }
+    let first_fingerprint = crate::config::bins_to_seconds(resource.t_min);
+    let last_fingerprint = crate::config::bins_to_seconds(resource.t_max);
+    if duration + DURATION_EARLY_TOLERANCE_SECONDS < last_fingerprint {
+        return Err(Error::BadRequest(format!(
+            "duration for {:?} is {duration:.6}s, before fingerprint extent {first_fingerprint:.6}–{last_fingerprint:.6}s",
+            resource.key
+        )));
+    }
+    let trailing_allowance =
+        DURATION_TRAILING_MIN_SECONDS.max(duration * DURATION_TRAILING_FRACTION);
+    if duration - last_fingerprint > trailing_allowance {
+        return Err(Error::BadRequest(format!(
+            "duration for {:?} leaves {:.6}s after its last fingerprint; maximum plausible trailing slack is {trailing_allowance:.6}s",
+            resource.key,
+            duration - last_fingerprint
+        )));
+    }
+    Ok(())
+}
+
+fn summarize_keys(keys: &[String]) -> String {
+    let mut summary = keys
+        .iter()
+        .take(5)
+        .map(|key| format!("{key:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if keys.len() > 5 {
+        summary.push_str(&format!(" (and {} more)", keys.len() - 5));
+    }
+    summary
+}
+
+fn immutable_resource_facts(resources: &[ResourceInfo]) -> Vec<ImmutableResourceFacts> {
+    resources
+        .iter()
+        .map(|resource| ImmutableResourceFacts {
+            id: resource.id,
+            key: resource.key.clone(),
+            postings: resource.postings,
+            t_min: resource.t_min,
+            t_max: resource.t_max,
+            content_hash: resource.content_hash.clone(),
+            shard: resource.shard,
+            forward_start: resource.forward_start,
+        })
+        .collect()
+}
+
 fn fingerprint_content_hash(prints: &[Fingerprint]) -> String {
     let mut digest = Sha256::new();
     for print in prints {
@@ -1054,6 +1278,12 @@ mod tests {
                 .collect(),
             prints_path: PathBuf::new(),
         }
+    }
+
+    fn matching_prints() -> Vec<(u64, u32, u16)> {
+        (0..20)
+            .map(|index| (1_000 + index * 10, index as u32 * 125, 100))
+            .collect()
     }
 
     #[test]
@@ -1176,5 +1406,165 @@ mod tests {
         let (_, unchanged) = Store::rehash_identities(root.path()).unwrap();
         assert_eq!(unchanged.resources_changed, 0);
         assert_eq!(unchanged.previous_generation, unchanged.generation);
+    }
+
+    #[test]
+    fn duration_publish_is_complete_atomic_and_passage_stable() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let prints = matching_prints();
+        let store = Store::build(
+            root.path(),
+            vec![resource("a", &prints), resource("b", &prints)],
+        )
+        .unwrap();
+        let expected_generation = store.stats().generation;
+        let before = crate::passages_between(&store, &store, "a", None, "b", false).unwrap();
+        assert!(!before.passages.is_empty());
+        let before_ids: Vec<_> = before
+            .passages
+            .iter()
+            .map(|passage| passage.passage_id.clone())
+            .collect();
+        let before_hashes: Vec<_> = store
+            .resources()
+            .iter()
+            .map(|resource| resource.content_hash.clone())
+            .collect();
+        let before_shards: Vec<_> = store
+            .manifest
+            .shards
+            .iter()
+            .map(|shard| shard.file.clone())
+            .collect();
+        drop(store);
+
+        let updates = vec![
+            DurationUpdate {
+                key: "a".into(),
+                duration_seconds: 20.5,
+            },
+            DurationUpdate {
+                key: "b".into(),
+                duration_seconds: 20.5,
+            },
+        ];
+        let (store, changed) =
+            Store::set_durations(root.path(), &expected_generation, updates.clone()).unwrap();
+        assert_eq!(changed.previous_generation, expected_generation);
+        assert_ne!(changed.generation, changed.previous_generation);
+        assert_eq!(changed.resources_changed, 2);
+        assert!(changed.content_hashes_unchanged);
+        assert!(changed.shards_reused);
+        assert!(
+            store
+                .resources()
+                .iter()
+                .all(|resource| resource.duration == 20.5)
+        );
+        assert_eq!(
+            store
+                .resources()
+                .iter()
+                .map(|resource| resource.content_hash.clone())
+                .collect::<Vec<_>>(),
+            before_hashes
+        );
+        assert_eq!(
+            store
+                .manifest
+                .shards
+                .iter()
+                .map(|shard| shard.file.clone())
+                .collect::<Vec<_>>(),
+            before_shards
+        );
+        let after = crate::passages_between(&store, &store, "a", None, "b", false).unwrap();
+        assert_eq!(
+            after
+                .passages
+                .iter()
+                .map(|passage| passage.passage_id.clone())
+                .collect::<Vec<_>>(),
+            before_ids
+        );
+        let generation = store.stats().generation;
+        drop(store);
+
+        let (_, unchanged) =
+            Store::set_durations(root.path(), &generation, updates.clone()).unwrap();
+        assert_eq!(unchanged.resources_changed, 0);
+        assert_eq!(unchanged.previous_generation, unchanged.generation);
+
+        let wrong_generation = Store::set_durations(root.path(), "wrong", updates)
+            .err()
+            .expect("expected generation rejection");
+        assert!(matches!(wrong_generation, Error::BadRequest(_)));
+    }
+
+    #[test]
+    fn duration_publish_rejects_incomplete_and_implausible_inputs() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let prints = matching_prints();
+        let store = Store::build(
+            root.path(),
+            vec![resource("a", &prints), resource("b", &prints)],
+        )
+        .unwrap();
+        let generation = store.stats().generation;
+        drop(store);
+
+        let incomplete = Store::set_durations(
+            root.path(),
+            &generation,
+            vec![DurationUpdate {
+                key: "a".into(),
+                duration_seconds: 20.5,
+            }],
+        )
+        .err()
+        .expect("expected missing-key rejection");
+        assert!(incomplete.to_string().contains("missing manifest keys"));
+
+        let too_short = Store::set_durations(
+            root.path(),
+            &generation,
+            vec![
+                DurationUpdate {
+                    key: "a".into(),
+                    duration_seconds: 2.0,
+                },
+                DurationUpdate {
+                    key: "b".into(),
+                    duration_seconds: 20.5,
+                },
+            ],
+        )
+        .err()
+        .expect("expected short-duration rejection");
+        assert!(too_short.to_string().contains("before fingerprint extent"));
+
+        let too_long = Store::set_durations(
+            root.path(),
+            &generation,
+            vec![
+                DurationUpdate {
+                    key: "a".into(),
+                    duration_seconds: 1_000.0,
+                },
+                DurationUpdate {
+                    key: "b".into(),
+                    duration_seconds: 20.5,
+                },
+            ],
+        )
+        .err()
+        .expect("expected trailing-slack rejection");
+        assert!(
+            too_long
+                .to_string()
+                .contains("maximum plausible trailing slack")
+        );
     }
 }

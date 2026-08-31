@@ -11,6 +11,7 @@ use resident_core::{
 
 mod ab_compare;
 mod daemon;
+mod durations;
 mod extract_verify;
 mod refingerprint;
 mod verify;
@@ -135,6 +136,15 @@ enum Command {
     RehashIdentities {
         #[arg(long)]
         store: PathBuf,
+    },
+    /// Publish authoritative duration metadata without changing fingerprint identity.
+    SetDurations {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        durations: PathBuf,
+        #[arg(long)]
+        expected_generation: String,
     },
     /// Serve the v0 JSON-lines protocol over stdin/stdout.
     Daemon {
@@ -318,6 +328,15 @@ fn main() -> anyhow::Result<()> {
         }
         Command::RehashIdentities { store } => {
             let (_, stats) = Store::rehash_identities(&store)?;
+            println!("{}", serde_json::to_string_pretty(&stats)?);
+        }
+        Command::SetDurations {
+            store,
+            durations,
+            expected_generation,
+        } => {
+            let updates = durations::load(&durations)?;
+            let (_, stats) = Store::set_durations(&store, &expected_generation, updates)?;
             println!("{}", serde_json::to_string_pretty(&stats)?);
         }
         Command::Daemon { store } => daemon::run(store)?,

@@ -219,7 +219,7 @@ that the hot path must preserve.
 
 The `0.7713125` value is not a dump-grammar ambiguity. Panako's cached-print constructor leaves
 `t3 = -1`; `PanakoStrategy.store()` later rewrites duration from the last cached fingerprint's `t3`.
-With the pinned transform latency this becomes:
+Panako's metadata path uses JGaborator's 12,469-sample scheduling support here, so this becomes:
 
 ```text
 (-128 + 12469) / 16000 = 0.7713125
@@ -242,19 +242,20 @@ duration correction cannot churn passage ids.
    and record old/new generations in the analysis-run preflight.
 4. Expect legacy duration-coupled hashes to change for all resources, not only the 1,498 rotten
    ones: the hash formula changed for every endpoint. Fingerprint shards are reused byte-for-byte.
-5. Independently derive trusted durations from authoritative audio probes, validate complete key
-   coverage and plausible agreement with `t_min/t_max`, then publish a duration-metadata-only
-   generation under an expected-generation precondition.
+5. Independently derive trusted durations from authoritative audio probes, then run
+   `resident set-durations --store PATH --durations durations.jsonl --expected-generation GEN`.
+   Resident validates complete key coverage and plausible agreement with `t_min/t_max` before an
+   atomic duration-metadata-only publication.
 6. Confirm that store generation changed but prints-only `content_hash` and passage ids did not.
 
 Step 2 is implemented and idempotent in `6e6daff`. It releases the previous 64 mmap views before
 opening the new generation, avoiding file-descriptor exhaustion. Revision `3bea7f7` also ensures
 unchanged ingest remains a no-op on an unprofiled legacy manifest before rehash.
 
-Step 5 is deliberately not implemented here: resident has no authoritative duration input in this
-task, and inventing one from rotten metadata would be worse than leaving metadata visibly wrong.
-Duration repair is not a passage-bank blocker because matching, same-audio coverage, and passage
-identity use fingerprint extents; the identity rehash is the required pre-bank step.
+Round 5 makes step 5 executable without changing its authority boundary: mixmd supplies the strict
+authoritative JSONL; resident refuses incomplete, implausible, or stale-generation input and verifies
+that shards, endpoint hashes, and passage ids remain unchanged. Resident still never guesses a
+duration from fingerprint metadata.
 
 ## 5. Phase 4 full-bank schedule
 
@@ -445,12 +446,13 @@ readable, the divergence was fixed by query geometry, and answer-level cohorts a
 legacy mesh in the expected places.
 
 If later answer-faithfulness fails for extraction reasons, treat native extraction as one immutable
-store-generation experiment. Freeze the existing pinned extraction identity: 16 kHz mono,
-128-sample/8 ms time step, measured 12,464-sample latency, 110–7040 Hz, 85 bands/octave, 103×25 peak
-filters, triplet time distance 2–33 bins, frequency distance ≤128 bins, and exact 34-bit Panako hash
-packing. Run resumable extraction with one output per audio revision, validate decode failures and
-durations before store build, then bank the same passage-v3 cohorts against both stores. Promote only
-on curator-auditioned answer fidelity, not print equality.
+store-generation experiment. Freeze both distinct latency quantities: 12,464 samples for public
+fingerprint timestamp conversion and 12,469 samples for JGaborator scheduling/analysis support. The
+rest of the pinned extraction identity is 16 kHz mono, 128-sample/8 ms time step, 110–7040 Hz, 85
+bands/octave, 103×25 peak filters, triplet time distance 2–33 bins, frequency distance ≤128 bins, and
+exact 34-bit Panako hash packing. Run resumable extraction with one output per audio revision,
+validate decode failures and durations before store build, then bank the same passage-v3 cohorts
+against both stores. Promote only on curator-auditioned answer fidelity, not print equality.
 
 That branch creates a new store and analysis run. It never mutates the read-only Panako-print
 reference, and it does not alter the Phase 4 checkpoint/migration design.

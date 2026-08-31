@@ -37,6 +37,8 @@ cargo run --release -- passages \
 cargo run --release -- discover --store ./archive-store --a-key archive \
   --target reference --exclude-key sibling-encoding
 cargo run --release -- rehash-identities --store ./archive-store
+cargo run --release -- set-durations --store ./archive-store \
+  --durations ./durations.jsonl --expected-generation STORE_GENERATION
 ```
 
 The daemon implements every v0 verb in `CONTRACT.md`, including native `extract` and atomic
@@ -59,6 +61,9 @@ so unblessed near-total diagonals are reported as `same_audio_candidate` rather 
 `rehash-identities` is an offline, idempotent maintenance command: it republishes the manifest with
 prints-only endpoint hashes and reuses all fingerprint shards. Run it before banking passage ids from
 a legacy duration-coupled store; it does not repair duration metadata itself.
+`set-durations` completes that repair from a strict, complete authoritative JSONL file. It requires
+the post-rehash generation, validates each duration against the stored fingerprint extent, and
+publishes metadata only while proving shards, endpoint hashes, and passage identity inputs unchanged.
 `refingerprint` turns a JSONL manifest (`{"key":"...","audio_path":"..."}`) into a resumable
 Panako-grammar dump directory. It logs periodic progress to stderr, writes a JSON summary to
 stdout, and records non-fatal per-audio decode errors in `failures.jsonl`.

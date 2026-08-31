@@ -27,4 +27,7 @@ pub use span::{
     CrosscheckMatch, Segment, crosscheck, crosscheck_between, crosscheck_between_multiline,
     crosscheck_multiline, span, span_between, span_between_multiline, span_multiline,
 };
-pub use store::{IdentityRehashStats, IngestStats, ResourceInfo, RetireStats, Store, StoreStats};
+pub use store::{
+    DurationPublishStats, DurationUpdate, IdentityRehashStats, IngestStats, ResourceInfo,
+    RetireStats, Store, StoreStats,
+};

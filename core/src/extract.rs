@@ -258,7 +258,7 @@ fn extract_chunks(
 }
 
 fn analysis_spectrum(samples: &[f32]) -> AnalysisSpectrum {
-    let fft_size = (samples.len() + 2 * crate::config::TRANSFORM_LATENCY_SAMPLES as usize)
+    let fft_size = (samples.len() + 2 * crate::config::TIMESTAMP_LATENCY_SAMPLES as usize)
         .next_power_of_two()
         .max(STREAM_FFT_SIZE);
     let mut bins = vec![Complex32::zero(); fft_size];

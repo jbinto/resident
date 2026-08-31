@@ -98,10 +98,9 @@ emitted later (SPEC §allowances).
 ## §time — bins ↔ seconds [V formula, I constant]
 
 `t` bins step by TRANSF_TIME_RESOLUTION=128 audio samples at SAMPLE_RATE=16000 ⇒ 8 ms/bin.
-`seconds(t) = t · 128/16000 + latency/16000` where `latency` is the transform's own group
-delay in samples, probed by Panako at startup from the Gaborator [I — value not yet measured].
-Derive the effective constant by fitting golden output times against raw probe print bins, and
-record the fitted value in DECISIONS.md. `binToHz(f)`: bands are log-spaced,
+`seconds(t) = t · 128/16000 + 12464/16000`. The fixture-proven 12,464-sample public timestamp
+latency is distinct from JGaborator's 12,469-sample scheduling/analysis support; extraction freezes
+both and must never use the latter in `bins_to_seconds`. `binToHz(f)`: bands are log-spaced,
 `hz = centToHz(hzToCent(TRANSF_MIN_FREQ=110) + f · 1200/BANDS_PER_OCTAVE)` [I — read
 BANDS_PER_OCTAVE from upstream `Config.java`; geometry suggests ~85/octave ⇒ ~512 bins over
 110–7040 Hz, ~14 cents/bin].

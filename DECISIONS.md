@@ -363,3 +363,19 @@ For a named pair, materialize postings only from the target shard but probe ever
 hash index for range presence. Retain globally present hashes—including those with no target hit—when
 calculating iteration capacity. This keeps the optimization's main benefit (no unrelated posting
 fan-out) while restoring exact accepted-line equivalence with the all-shard path.
+
+## 2026-08-30 — publish authoritative durations only as complete metadata
+
+Add offline `set-durations` after `rehash-identities`. Mixmd supplies strict JSONL from authoritative
+decode probes; resident never derives duration from fingerprints. Require the caller's expected
+generation, a `prints-v1` manifest, every key exactly once, no unknown keys, and finite positive
+values. Reject a duration more than one second before its last fingerprint or with trailing slack
+greater than 10 seconds or 1% of duration. In the production manifest, all 1,393 non-rotten rows end
+0.032–0.521 seconds after their last fingerprint, while all 1,498 rotten rows end before it, so this
+bound is conservative and catches the observed failure.
+
+Clone and edit only manifest durations, reuse every shard, and atomically publish a generation whose
+identity profile and endpoint hashes are unchanged. Reopen and compare immutable resource facts and
+shard names as a postcondition. Passage ids exclude generation and duration; a test performs the same
+pair query before and after publication and requires identical ids. A complete no-change rerun is an
+idempotent zero-update result.

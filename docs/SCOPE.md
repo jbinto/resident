@@ -13,6 +13,8 @@ out wrong, the engine says so loudly instead of approximating.
   (CONTRACT.md).
 - Offline `rehash-identities` maintenance publishes prints-only endpoint identities without
   rewriting fingerprints or exposing a concurrent daemon mutation.
+- Offline `set-durations` maintenance accepts a complete authoritative duration map, validates it
+  against fingerprint extents, and atomically reuses identity and shard bytes.
 - Fixture verification harness (`verify`).
 - Opt-in ranked multi-line emission for `match`, `span`, and `crosscheck`; absent/false retains
   jar single-line parity and original region behavior.

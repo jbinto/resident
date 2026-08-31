@@ -3,8 +3,8 @@ use sha2::{Digest, Sha256};
 pub const SAMPLE_RATE: u32 = 16_000;
 pub const TIME_RESOLUTION: u32 = 128;
 pub const TIME_BIN_SECONDS: f64 = TIME_RESOLUTION as f64 / SAMPLE_RATE as f64;
-pub const TRANSFORM_LATENCY_SAMPLES: u32 = 12_464;
-pub const TRANSFORM_LATENCY_SECONDS: f64 = TRANSFORM_LATENCY_SAMPLES as f64 / SAMPLE_RATE as f64;
+pub const TIMESTAMP_LATENCY_SAMPLES: u32 = 12_464;
+pub const TIMESTAMP_LATENCY_SECONDS: f64 = TIMESTAMP_LATENCY_SAMPLES as f64 / SAMPLE_RATE as f64;
 pub const MIN_FREQUENCY_HZ: f64 = 110.0;
 pub const MAX_FREQUENCY_HZ: f64 = 7_040.0;
 pub const REFERENCE_FREQUENCY_HZ: f64 = 440.0;
@@ -34,14 +34,14 @@ pub fn config_id() -> String {
 }
 
 pub fn bins_to_seconds(t: u32) -> f64 {
-    f64::from(t) * TIME_BIN_SECONDS + TRANSFORM_LATENCY_SECONDS
+    f64::from(t) * TIME_BIN_SECONDS + TIMESTAMP_LATENCY_SECONDS
 }
 
 pub fn seconds_to_bin(seconds: f64) -> Option<u32> {
-    if !seconds.is_finite() || seconds < TRANSFORM_LATENCY_SECONDS {
+    if !seconds.is_finite() || seconds < TIMESTAMP_LATENCY_SECONDS {
         return None;
     }
-    let bin = ((seconds - TRANSFORM_LATENCY_SECONDS) / TIME_BIN_SECONDS).ceil();
+    let bin = ((seconds - TIMESTAMP_LATENCY_SECONDS) / TIME_BIN_SECONDS).ceil();
     (bin <= f64::from(u32::MAX)).then_some(bin as u32)
 }
 

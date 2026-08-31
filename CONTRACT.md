@@ -135,6 +135,9 @@ cannot prove that differently encoded fingerprints are one logical audio revisio
 same-audio candidates and the caller must exclude every sibling key it has already blessed.
 Discovery is exhaustive only for the stated A→B
 snapshot and target set.
+A bounded request may name every key in the pinned B snapshot; resident imposes no smaller numeric
+chunk limit, so hundreds of repeated CLI `--target KEY` flags are supported and job-side chunking is
+only for checkpoint granularity.
 A corpus job that needs the union of both directions must also schedule corpus→A probes; reverse
 absence must never erase a surviving forward observation.
 
@@ -159,6 +162,30 @@ verb. It atomically republishes an unmarked legacy manifest with `prints-v1` has
 stored `(hash,t,f)` postings, reusing all shard files. Output is
 `{"previous_generation":"...","generation":"...","resources_changed":N}`. Re-running it is a
 no-op with identical generations and zero changed resources. It does not change duration metadata.
+
+### operator-only duration publication
+
+```
+resident set-durations --store PATH --durations durations.jsonl \
+  --expected-generation GENERATION
+```
+
+The strict JSONL input has exactly `{"key":"...","duration_seconds":s}` per line. It must cover
+every manifest key exactly once and no unknown key. Durations must be finite and positive, no more
+than 1 second before the final fingerprint timestamp, and may leave at most the greater of 10 seconds
+or 1% of duration after it. Zero-posting resources have no extent check.
+
+The store must already carry the `prints-v1` identity profile. A generation mismatch or invalid row
+is `bad_request` and publishes nothing. Success atomically changes only duration metadata and the
+store generation, reuses every shard, and verifies that fingerprint identity inputs are unchanged:
+
+```json
+{"previous_generation":"...","generation":"...","resources_changed":N,
+ "content_hashes_unchanged":true,"shards_reused":true}
+```
+
+Re-running the complete file against the returned generation is a no-op. This is deliberately an
+offline CLI maintenance operation rather than a concurrent daemon verb.
 
 ### extract — audio in, prints out (the extraction lane; SPEC §extraction)
 `{"audio_path": "<file>"}` → `{"prints": [[hash, t, f], ...], "duration": s}`
