@@ -319,6 +319,31 @@ print, anchor, and downstream-answer levels. Imported Panako prints remain the c
 Yes. Fingerprints can be re-queried without re-extraction. A change that affects observation
 identity must receive a new explicit profile so old and new banks can coexist and be compared.
 
+## Acknowledgements and lineage
+
+Resident would not exist without [Panako](https://github.com/JorenSix/Panako), the acoustic
+fingerprinting research software developed by **Joren Six at IPEM, Ghent University**. Panako's
+pitch- and time-scale-tolerant fingerprint domain, file-cache dump grammar, and query behavior are
+the foundation of Resident's compatibility lane. The exact behavioral reference is Panako 2.1 at
+commit `e4b0e1d`, not an unspecified “Panako-like” algorithm. The bundled golden answers and imported
+prints were produced by that software under the pinned configuration recorded in
+`fixtures/manifest.json`.
+
+The underlying research should be credited to **Joren Six and Marc Leman**, “Panako — A Scalable
+Acoustic Fingerprinting System Handling Time-Scale and Pitch Modification,” ISMIR 2014. Panako is
+licensed under the GNU Affero General Public License v3.
+
+Panako 2.1 performs its log-frequency Gabor analysis through JGaborator, Joren Six's JNI bridge to
+[Gaborator](https://www.gaborator.com/) by **Andreas Gustafsson**. Gaborator is a C++ implementation
+of a constant-Q Gabor transform and is also offered under AGPLv3. Resident owes its extraction
+geometry and several compatibility observations to that stack.
+
+Resident does **not** vendor, link, or invoke Panako, JGaborator, or Gaborator at runtime. Its native
+extractor is an independent safe-Rust frequency-domain implementation of the analysis subset it
+needs, using `rustfft`; its fidelity is measured behaviorally and is not presented as bit-identical.
+The names Panako, JGaborator, and Gaborator identify upstream work and do not imply endorsement of
+Resident by their authors.
+
 ## Development
 
 The workspace uses Rust 2024 and forbids unsafe code except in the isolated mmap view, where every
@@ -342,9 +367,11 @@ Before committing:
 - [REPORT.md](REPORT.md) — current validation brief, production replay receipts, and open limits.
 - [fixtures/README.md](fixtures/README.md) — fixture corpus and verification workflow.
 - [rig/README.md](rig/README.md) — how the fixture inputs were captured.
-- [AGENTS.md](AGENTS.md) — repository rules for coding agents.
+- [AGENTS.md](AGENTS.md) — contributor rules for humans and coding agents.
 
 ## License
 
-AGPL-3.0. Resident derives compatibility knowledge, and some algorithms, from Panako. See
-[LICENSE](LICENSE).
+Resident is licensed under AGPL-3.0-only. That choice reflects both its network-service use case and
+its direct algorithmic/behavioral lineage from AGPL-licensed Panako and Gaborator. See
+[LICENSE](LICENSE). Audio and metadata in a fixture set may have separate rights; the project
+license does not automatically relicense third-party recordings.

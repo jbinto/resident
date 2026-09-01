@@ -1,9 +1,14 @@
 # ENGINE-FACTS — everything known about Panako's data and matcher
 
-Reconstructed from upstream source (JorenSix/Panako @ `e4b0e1d`, the exact commit the reference jar
-was built from), live production scripts, and direct probes of the real store. The facts below have
-been verified against source or fixtures. When a fixture disagrees with this file, the fixture wins
-and the correction belongs in `DECISIONS.md`.
+These compatibility facts come directly from [Panako](https://github.com/JorenSix/Panako), developed
+by Joren Six at IPEM, Ghent University, at commit `e4b0e1d`. Panako 2.1 performs spectral analysis
+through JGaborator and [Gaborator](https://www.gaborator.com/) by Andreas Gustafsson. Resident does
+not vendor those projects, but its matcher deliberately reproduces pinned Panako behavior and its
+native extractor independently implements the analysis subset observed through that stack.
+
+The details were reconstructed from upstream source, live reference scripts, and direct probes of
+the real store. They have been verified against source or fixtures. When a fixture disagrees with
+this file, the fixture wins and the correction belongs in `DECISIONS.md`.
 
 ## §dump — the fingerprint dump grammar [V]
 
