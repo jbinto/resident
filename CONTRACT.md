@@ -93,6 +93,10 @@ deduplicated matched hits, supported seconds, coverage within the A envelope, la
 segment/support counts, factor ranges, and minimum `sec_with_match`. Envelopes do **not** claim
 that holes matched; only `support` does. All observations are presence evidence and non-exclusive:
 a passage saying B is present underneath A does not say that no overlay is present.
+`support` splits when consecutive accepted hits are more than 1.5 seconds apart on either clock;
+the resulting small, often 1.5–2.2-second gaps are evidence-density thresholding rather than
+analysis-block seams, and consumers may visually de-emphasize them but must not fill them as matched
+support because real masking or changed audio can produce the same shape.
 
 Passage mode uses 12-second query regions on an 8-second hop,
 anchored at zero. Overlapping regions may repeat exact hits; the quality count deduplicates them.
