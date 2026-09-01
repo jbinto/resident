@@ -15,14 +15,15 @@ Regenerate only there; never hand-edit.
   verbatim (13th-column check, formatting questions: consult `raw`).
 - `queries/<name>/window.wav` — the window's actual audio (44.1 kHz mono WAV, pre-decoded).
   The extraction lane's validation input: extract from this, compare against `prints.tdb`
-  (print tier) and against `golden.json` via your own matcher (match tier) — SPEC §extraction.
+  (print tier) and against `golden.json` through Resident's matcher (answer tier) — SPEC §extraction.
 - `manifest.json` — jar sha, upstream commit, full config snapshot, resource list,
   `known_pairs` (which resources share material, with production-measured span sizes — the
   behavioral targets for `span`/`crosscheck`).
 
 ## What parity means
 
-See SPEC §acceptance. `prints.tdb` in, `golden.json` out. Query names: `pairN_25/50/75` are
+See `SPEC.md` §Compatibility matching. `prints.tdb` in, `golden.json` out. Query names:
+`pairN_25/50/75` are
 windows from a mix known to share material with a partner in the store (expect cross-matches
 plus a perfect self-match); `loneN_50` are distractors (expect self-match only, usually).
 Every row's `score` is an integer hit count — exact match required. The self-match is a

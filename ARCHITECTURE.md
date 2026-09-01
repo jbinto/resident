@@ -21,6 +21,7 @@ engine identity.
 | `core/src/passage.rs` | directional passage identity, support spans, geometry stitching |
 | `core/src/extract.rs` | bounded native audio analysis and ordered print emission |
 | `resident/src/daemon.rs` | concurrent typed JSON-lines process edge |
+| `resident/src/durations.rs` | authoritative duration validation and metadata publication |
 | `resident/src/refingerprint.rs` | resumable parallel corpus dump production |
 | `resident/src/ab_compare.rs` | cutover agreement reports and evidence |
 | `resident/src/verify.rs`, `extract_verify.rs` | fixture acceptance commands |
@@ -103,13 +104,13 @@ for the request; absence keeps the original attached-store behavior.
 
 ## Passage observations
 
-`core/src/passage.rs` is an additive product-facing lane over the unchanged multiline voter.
+`core/src/passage.rs` is an additive higher-level evidence lane over the unchanged multiline voter.
 `passages` answers one A→B pair; `discover` exhaustively fans A out over a target snapshot rather
 than applying `crosscheck`'s ranking limit. Both retain store generations and endpoint content
 hashes so a consumer can bank immutable observations and supersede them after audio or algorithm
 changes without re-extracting fingerprints.
 
-The `passage-v3` question geometry is the production identify geometry: 12-second regions every
+The `passage-v3` question geometry uses 12-second regions every
 8 seconds, anchored at zero. Compatibility `span`/`crosscheck` retain their original non-overlapping
 30-second regions. Passage construction deduplicates exact filtered hits repeated by overlapping
 regions, then turns them into evidence-dense support runs. A run breaks when either clock goes more

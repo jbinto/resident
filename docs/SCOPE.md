@@ -1,10 +1,10 @@
 # SCOPE — what this engine is and is not
 
-Slim and built-to-purpose: this engine implements **only the subset of Panako's behavior the
-archive actually uses**, and it knows its own boundaries. If the subset assumption ever turns
-out wrong, the engine says so loudly instead of approximating.
+Slim and built-to-purpose: this engine implements **only the pinned Panako behavior covered by its
+compatibility oracle**, and it knows its own boundaries. Requests outside that subset fail loudly
+instead of being approximated.
 
-## In (v0)
+## In
 
 - STRATEGY=PANAKO matching semantics under the single pinned config (ENGINE-FACTS §config).
 - Ingest of Panako plain-text fingerprint dumps; own versioned store (forward + inverted
@@ -24,25 +24,23 @@ out wrong, the engine says so loudly instead of approximating.
   windows, including row spans, score deltas, ranked divergences, and named evidence dumps.
 - Cross-store `span` and `crosscheck`: probe resources in A, explicit targets or an entire
   reference/additional-corpus store in B, under one required config identity.
-- Additive `passage-v3` observations: production-compatible 12-second/8-second query geometry,
+- Additive `passage-v3` observations: overlapping 12-second/8-second query geometry,
   deterministic pairwise passage ids, explicit dense-support
   intervals and holes, quality vectors, endpoint revisions, geometry-aware region stitching,
   dominated-alignment alternates, same-audio candidates, and exhaustive directional discovery
   without top-`k` graph loss.
 - Conversion layer: time bins↔seconds, freq bins↔Hz.
-- **Extraction** (SPEC §extraction — built AFTER matcher parity is green): decode/resample
-  front (ffmpeg subprocess or established crates) → log-frequency transform → event points →
-  triplets → Panako's exact hash packing. Two-tier validation; bit-exactness ruled
-  not-required. Bounded-memory chunk analysis and ordered print emission support multi-hour
-  inputs. This lane sheds the Java + Gaborator dependency entirely.
+- **Extraction** (SPEC §extraction): ffmpeg decode/resample → log-frequency transform → event
+  points → triplets → Panako's exact hash packing. Bounded-memory chunk analysis and ordered print
+  emission support multi-hour inputs. Answer-level validation replaces a bit-exactness requirement.
 
-## Out (deliberately, v0) — asked-for = `unsupported` error, never approximation
+## Out — asked-for means `unsupported`, never approximation
 
 - OLAF strategy, monitor/sync modes, any Panako CLI surface beyond the subset above.
 - IDF/rarity weighting (measured mild; ruled out).
 - Network transport (stdio only; unix socket is a planned iteration).
 - Reading Panako's LMDB directly (dumps are the compat seam).
-- CI, packaging, distribution (will come; `./check.sh` is the gate meanwhile).
+- CI, packaging, and distribution. `./check.sh` remains the local release gate.
 - Corpus-global recurrence-class identity, title/name resolution, canon mutation, and human review
   workflow. Resident supplies immutable signal observations; a persistent middle layer owns these.
 - Claims that an unmatched overlay is voice or that a matched underlay is the only active layer.
@@ -56,13 +54,11 @@ out wrong, the engine says so loudly instead of approximating.
 - Hash values must fit 34 bits; a dump violating the grammar or ranges fails ingest loudly
   with file+line context.
 
-## Named future lanes (design for, don't build)
+## Deliberately deferred lanes
 
 1. **Unix-socket transport** for multi-client serving.
 2. **CI** — `check.sh` becomes the pipeline verbatim.
-3. **Run the full-corpus re-fingerprint and cutover** — the resumable tool and A/B gate now
-   exist; the 10–20 hour production execution remains an operator action.
-4. **Full-corpus scale validation** — dev store is ~20 resources; production is ~2,900 /
-   ~412M postings.
-   Nothing in the design may assume the dev size (mmap + binary search scales; document any
-   place you knowingly traded scale for simplicity).
+3. **Bounded-memory dump ingest** — query serving is mmap-backed, while building a very large store
+   still deserves tighter peak-memory characterization and streaming shard construction.
+4. **Named immutable target-store registry** — repeated cross-store daemon requests currently open
+   their target store per request.

@@ -1,10 +1,9 @@
 # ENGINE-FACTS — everything known about Panako's data and matcher
 
-Reconstructed from upstream source (JorenSix/Panako @ `e4b0e1d`, the exact commit our jar was
-built from — unmodified), from live production scripts, and from direct probes of the real
-store. Confidence marks: **[V]** verified against live data/source quote · **[I]** inferred,
-verify against source before leaning hard. When a fixture disagrees with this file, the
-fixture wins — then log the correction in DECISIONS.md.
+Reconstructed from upstream source (JorenSix/Panako @ `e4b0e1d`, the exact commit the reference jar
+was built from), live production scripts, and direct probes of the real store. The facts below have
+been verified against source or fixtures. When a fixture disagrees with this file, the fixture wins
+and the correction belongs in `DECISIONS.md`.
 
 ## §dump — the fingerprint dump grammar [V]
 
@@ -85,25 +84,23 @@ Given probe prints (hash, t, f) and the store:
 10. Drop if filtered count ≤ MIN_HITS_FILTERED (5). **score = filtered hit count** (raw int).
 11. Duration gate: matched query span ≥ MIN_MATCH_DURATION (5 s).
 12. Per-second histogram over ref time of filtered hits → `percentOfSecondsWithMatches`
-    (= 1 − emptySeconds/ceil(span)); gate on MIN_SEC_WITH_MATCH. Upstream builds this
-    histogram and then throws it away — you keep it (evidence).
+    (= 1 − emptySeconds/ceil(span)); gate on MIN_SEC_WITH_MATCH. Upstream builds this histogram and
+    discards it after the query; Resident can retain it as optional evidence.
 13. Emit (query span, ref span, score, timeFactor, frequencyFactor, pct); sort score-desc,
     truncate to NUMBER_OF_QUERY_RESULTS.
 
-Known consequence of steps 5–9: only ONE offset line survives per (query, resource) — a DJ
-blend (two records playing) has its second line actively deleted as noise. v0 must reproduce
-this (the oracle demands it); the voter should be structured so ranked secondary lines can be
-emitted later (SPEC §allowances).
+Known consequence of steps 5–9: only one offset line survives per (query, resource)—a DJ blend can
+have its second line actively deleted as noise. Resident's default voter reproduces this for oracle
+compatibility; opt-in multiline mode repeatedly applies the same voter to residual hits.
 
-## §time — bins ↔ seconds [V formula, I constant]
+## §time — bins ↔ seconds [V]
 
 `t` bins step by TRANSF_TIME_RESOLUTION=128 audio samples at SAMPLE_RATE=16000 ⇒ 8 ms/bin.
 `seconds(t) = t · 128/16000 + 12464/16000`. The fixture-proven 12,464-sample public timestamp
 latency is distinct from JGaborator's 12,469-sample scheduling/analysis support; extraction freezes
-both and must never use the latter in `bins_to_seconds`. `binToHz(f)`: bands are log-spaced,
-`hz = centToHz(hzToCent(TRANSF_MIN_FREQ=110) + f · 1200/BANDS_PER_OCTAVE)` [I — read
-BANDS_PER_OCTAVE from upstream `Config.java`; geometry suggests ~85/octave ⇒ ~512 bins over
-110–7040 Hz, ~14 cents/bin].
+both and must never use the latter in `bins_to_seconds`. Frequency bands are log-spaced at 85
+bands per octave: `binToHz(f) = 110 · 2^(f/85)`, yielding about 510 analysis bands from
+110–7040 Hz.
 
 ## §config — the ONE pinned config [V — live production values]
 
@@ -120,7 +117,7 @@ The store, the fixtures, and therefore this engine are pinned to (PANAKO_* prefi
 | QUERY_RANGE | 2 | ±hash scan AND line residual bound |
 | MIN_HITS_UNFILTERED / MIN_HITS_FILTERED | 10 / 5 | matcher gates |
 | MIN_MATCH_DURATION | 5 | seconds |
-| MIN_SEC_WITH_MATCH | (jar default) [I] | coverage gate — confirm from Config.java |
+| MIN_SEC_WITH_MATCH | 0.2 | coverage gate |
 | MIN/MAX_TIME_FACTOR, MIN/MAX_FREQ_FACTOR | 0.8 / 1.2 | factor gates |
 | HIT_PART_MAX_SIZE / HIT_PART_DIVIDER | 250 / 5 | end-segment sizing |
 
@@ -135,7 +132,7 @@ drift.
 `;`-separated, ≥12 columns: `idx ; batchTotal ; query_path ; q_start ; q_stop ; ref_path ;
 ref_id ; ref_start ; ref_stop ; score ; time_factor ; pitch_factor [; pct_sec_with_match]`.
 Factors print as `"1.000 %"` (percent sign is noise). Score is the raw filtered-hit count.
-Column 12 (pct) existence: confirm against raw fixture lines (kept verbatim in goldens).
+The thirteenth field is the seconds-with-match fraction; raw fixture lines preserve it verbatim.
 
 ## §quirks — jar behaviors catalogued (context for what NOT to inherit)
 
@@ -146,22 +143,22 @@ Column 12 (pct) existence: confirm against raw fixture lines (kept verbatim in g
 - Wrong store path ⇒ silent zero-match answers.
 - Re-`store` of the same file doubles its postings (non-idempotent).
 - Needs `--add-opens` JVM reflection flags or dies at startup.
-- **Matches across silence**: near-zero-amplitude regions fingerprint and cross-match
-  unrelated recordings (measured: one 24 s silent head matched 8 unrelated nights). This is a
-  property of the print data, not the matcher — reproduce faithfully (the consumer handles
-  it); do NOT add cleverness here, but it explains oddities you may see in fixtures.
+- **Matches across silence**: near-zero-amplitude regions fingerprint and cross-match unrelated
+  recordings (measured: one 24 s silent head matched 8 unrelated nights). This is a property of the
+  print data, not the matcher. Compatibility matching preserves it; downstream policy may treat it
+  separately.
 - Resource ids are a path-string hash (int); collisions theoretically possible, never
-  observed at ~2.9k resources. Your engine's caller-key model sidesteps this class.
+  observed at ~2.9k resources. Resident's caller-key model sidesteps this class.
 
-## §extraction — the Gaborator subset (the second deliverable — SPEC §extraction)
+## §extraction — the implemented Gaborator-compatible subset
 
-Upstream extraction chain (yours to rebuild, after matcher parity):
+The upstream extraction chain that Resident implements is:
 
 1. Decode to mono 16 kHz.
 2. **Gaborator** (C++ via JNI): log-frequency Gabor transform — constant-Q-like magnitude
    spectrogram, bands log-spaced from 110 to 7040 Hz around ref 440 (~14 cents/bin, ~512
-   bins [I]), one frame per 128 samples (8 ms), with a fixed group-delay latency the code
-   compensates in blocksToSeconds().
+   bins), one frame per 128 samples (8 ms), with a fixed group-delay latency the code
+   compensates in `blocksToSeconds()`.
 3. Event points: per-frame vertical max-filter (FREQ_MAX_FILTER_SIZE=103 bins) + horizontal
    max over TIME_MAX_FILTER_SIZE=25 frames; a bin survives iff it equals both maxima and is
    nonzero. Magnitude = 3×3 neighborhood sum.
@@ -169,21 +166,16 @@ Upstream extraction chain (yours to rebuild, after matcher parity):
    FP_MAX_FREQ_DIST=128 bins (inner loops break early on time distance).
 5. Hash per §hash; emit (hash, t1, f1).
 
-Your extractor (rustfft or any solid CQT/Gabor crate — established libraries welcome; the
-Gaborator itself is analysis with log-spaced Gaussian-windowed bands, so a well-built CQT is
-the same mathematical object) reproduces steps 2–5 under the §config pin, with **Panako's
-exact hash packing** (§hash) so prints stay store-interoperable. Bit-exactness is ruled
-not-required — peak picking near ties legitimately differs, and a different-but-equally-good
-peak set is acceptable; the two-tier validation in SPEC §extraction is the standard. Decode +
-resample to 16 kHz mono is a front-end concern (ffmpeg subprocess is acceptable; pure-Rust
-decode/resample crates welcome) — note the resampler choice affects peaks slightly, which the
-tolerance absorbs. The fixture windows (`queries/*/window.wav`) are pre-decoded 44.1 kHz mono
-WAV: your front resamples them, sidestepping compressed-codec variance for validation.
+Resident reproduces steps 2–5 under the pinned config with `rustfft` and exact Panako hash packing,
+so imported and native prints share a store domain. Bit-exact extraction is not required: peak
+picking near ties legitimately differs, and acceptance is measured at print, anchor, and downstream
+answer levels. An ffmpeg subprocess decodes and resamples to mono 16 kHz. Fixture windows are
+pre-decoded 44.1 kHz mono WAV, avoiding compressed-codec variance during validation.
 
 ## §upstream — where to verify [V]
 
 Clone `https://github.com/JorenSix/Panako` at `e4b0e1d` (AGPL — the reason this repo is AGPL).
 Load-bearing files: `PanakoStrategy.java` (query path 263–496; line-fit 376; pitch factor 384;
 per-second histogram 456) · `PanakoFingerprint.java` (hash 231–273) · `PanakoStorageFile.java`
-(.tdb grammar) · `Config.java`/`Key.java` (every default marked [I] above) ·
+(.tdb grammar) · `Config.java`/`Key.java` (pinned defaults) ·
 `PanakoEventPointProcessor.java` (extraction).

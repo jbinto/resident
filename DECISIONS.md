@@ -1,6 +1,7 @@
 # DECISIONS — rulings and reasons
 
-Append-only. Each entry describes a choice embodied by the same commit.
+Append-only. Each entry describes a choice embodied by the same commit. Later entries may supersede
+earlier experiments; `ARCHITECTURE.md`, `CONTRACT.md`, and `SPEC.md` state current behavior.
 
 ## 2026-08-28 — pin the initially inferred transform latency remainder
 
@@ -366,8 +367,8 @@ fan-out) while restoring exact accepted-line equivalence with the all-shard path
 
 ## 2026-08-30 — publish authoritative durations only as complete metadata
 
-Add offline `set-durations` after `rehash-identities`. Mixmd supplies strict JSONL from authoritative
-decode probes; resident never derives duration from fingerprints. Require the caller's expected
+Add offline `set-durations` after `rehash-identities`. The caller supplies strict JSONL from
+authoritative decode probes; Resident never derives duration from fingerprints. Require the caller's expected
 generation, a `prints-v1` manifest, every key exactly once, no unknown keys, and finite positive
 values. Reject a duration more than one second before its last fingerprint or with trailing slack
 greater than 10 seconds or 1% of duration. In the production manifest, all 1,393 non-rotten rows end

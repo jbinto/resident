@@ -1,146 +1,161 @@
-# SPEC — the resident matching engine
+# SPEC — behavioral specification
 
-## Background (all you need)
+This document states the behavior Resident is expected to preserve. `ARCHITECTURE.md` describes the
+implementation, `CONTRACT.md` defines the public interface, and fixtures decide any disagreement
+about Panako compatibility.
 
-The corpus: ~2,900 recordings ("mixes"), each ~1–2 h of continuous DJ radio. Every mix was
-fingerprinted by Panako 2.1 (STRATEGY=PANAKO): a log-frequency spectral transform → spectral
-peak events → 3-event landmark hashes. The full posting set is ~412M entries over ~14.4M
-distinct hashes (mean ~29 postings/hash, max ~4k — hash skew is MILD; do not build IDF/rarity
-weighting, it was measured and ruled a non-driver).
+## Mission
 
-Today every question requires running the Java jar with *audio in*: decode, re-extract, then
-match — seconds to minutes per question, one JVM at a time. But both sides of nearly every
-question we ask are ALREADY fingerprinted. This engine exists to exploit that: ingest the
-extracted prints once, then answer matching questions at memory speed, concurrently, with no
-audio and no extraction in the loop.
+Resident answers cross-recording audio questions over fingerprints stored once. It supports a
+Panako-compatible matching lane and a higher-level passage lane without requiring audio decode or
+extraction during stored-resource queries.
 
-## What you are building
+The reference corpus used to shape the engine contains roughly 2,900 long-form recordings and 412
+million postings. Both sides of a question are commonly already fingerprinted. The store therefore
+serves two access orders:
 
-A Rust workspace: a core library plus a `resident` binary that runs as a long-lived daemon
-speaking JSON-lines over stdin/stdout (CONTRACT.md), plus one-shot CLI subcommands for ingest
-and verification. Input format: Panako's plain-text fingerprint dumps (grammar in
-ENGINE-FACTS.md §dump). Store format: **yours to design**, under these constraints:
+- inverted `(hash → resource/time/frequency)` lookup for identification;
+- forward `(resource/time → hash/frequency)` scans for stored-resource windows.
 
-- mmap-friendly and instantly warm: open = map + read header, no deserialization pass.
-- Both access orders served: by-hash (inverted: global identification) and by-resource-by-time
-  (forward: range-scan one mix's prints over a time window — this order is the new capability;
-  Panako discards it).
-- Retire of a resource must be cheap and real (contiguous-range drop or equivalent — not
-  tombstone-forever).
-- Versioned header + explicit generation identity. Rebuild-from-dumps is the recovery story:
-  the store is a derived artifact; corruption handling = refuse loudly + rebuild, NOT
-  journaling/WAL ceremony.
-- Immutable generations: readers map a generation; writers build the next and atomically swap
-  (manifest rename). Concurrent readers are trivially safe by construction.
-- Memory posture: mmap-first is the baseline AND the big-RAM strategy — the primary deploy
-  target has 128 GB RAM, so the page cache will hold the entire production store (~15–30 GB)
-  and reads run at RAM speed with zero configuration. Optional explicit accelerations
-  (prefault/mlock on open, resident in-RAM structures for the hash index) are welcome behind
-  flags; nothing may *require* big RAM — on a modest box the same binary degrades gracefully
-  to page-cache behavior.
-- Store compatibility means: ingests the provided dumps + reproduces the oracle's answers.
-  The on-disk layout is private and **expected to diverge from Panako permanently**. Design
-  for our access patterns, not for Panako's layout.
+Native extraction makes new stores independent of Java, JNI, and Gaborator. Imported Panako dumps
+remain supported as a compatibility and migration path.
 
-## The oracle
+## Store requirements
 
-`fixtures/` contains a mini-store dump (a few dozen real resources) and golden query results:
-for each query, the exact fingerprints Panako extracted (so your probe set is identical) and
-the exact rows the jar returned against a store built from those same dumps. The matcher
-algorithm is documented step-by-step in ENGINE-FACTS.md §matcher — implement those semantics,
-then verify against the goldens. When doc and fixture disagree, the fixture wins.
+- Opening an existing store maps immutable files; it performs no posting deserialization pass.
+- Readers need no write access and may safely share a generation across processes.
+- A writer builds immutable shards and a manifest before atomically publishing `CURRENT`.
+- Existing readers finish against their captured snapshot after a new generation is published.
+- Identical-content ingest at an existing key is a no-op. Changed content requires explicit
+  replacement.
+- Retirement removes a resource from rebuilt affected shards; tombstones do not accumulate.
+- Every generation pins a fingerprint configuration identity and rejects incompatible input.
+- Missing, corrupt, empty, or version-incompatible stores fail distinctly and never masquerade as
+  an empty match result.
+- The store is a derived artifact. Its recovery mechanism is a rebuild from dumps or audio, not a
+  journal.
+- Mmap plus the operating-system page cache is both the modest-machine and large-RAM strategy.
 
-## Acceptance
+The on-disk format is private to Resident and is not expected to match Panako storage.
 
-1. **`verify` (the gate):** for every fixture query, run your `match` with the provided probe
-   prints against your store built from `fixtures/store-dump/`. Parity target: identical match
-   sets (same references matched, none missing, none extra), scores exactly equal (they are
-   integer hit counts), all times within ±0.02 s (float/latency slack), factors within ±0.001.
-   Ship a `verify` subcommand that prints a per-query and aggregate report. Any residual
-   divergence: root-cause it in DECISIONS.md — a tolerance you had to widen is a finding, not
-   a fudge.
-2. **`span`/`crosscheck` (behavioral):** no jar goldens exist for store-vs-store (the jar
-   cannot ask the question — that is the point). Required checks: (a) `span(A, window, A)`
-   returns the identity match; (b) for fixture pairs known to share material (listed in
-   `fixtures/manifest.json`), `span`/`crosscheck` find overlap consistent with the `match`
-   goldens' cross-references; (c) results are deterministic and stable-ordered.
-3. **Latency (informal):** report `match` and `span` timings on the dev store in REPORT.md.
-   Target class: milliseconds, not seconds. Criterion benches welcome but not required.
+## Compatibility matching
 
-## Output doctrine (rulings from the consuming system — honor exactly)
+The default voter reproduces the pinned Panako 2.1 behavior documented in
+`docs/ENGINE-FACTS.md`:
 
-- **Emit raw facts; never interpret.** No merging of adjacent matches, no score floors beyond
-  Panako's own internal gates, no dedup across windows. The consumer merges; "the lab states
-  facts; merging is interpretation." A single-window hit is kept — never dropped as noise.
-- **Emit every column Panako computes**, including time_factor, pitch_factor, and
-  seconds-with-match coverage — precision downstream comes from these, not from grid tuning.
-- **Evidence on request** (`evidence: true`): the filtered hit list [(q_t, ref_t) …], the
-  offset histogram's top bins, per-second match density. Panako computes these and throws them
-  away; you keep them available. Do not bloat default responses with them.
-- **Errors are errors.** A dead or absent store, a bad request, a version mismatch — typed
-  errors on the wire, never an empty result set. (A predecessor silently returned "no matches"
-  from a wrong store path; that class of bug cost real data and must be unexpressible here.)
+- ±2 hash lookup;
+- the oracle's modal offset-line fit, gates, Java float arithmetic, and tie behavior;
+- score as the accepted filtered-hit count;
+- stable score-descending output with a key tie-break;
+- every computed factor and coverage field retained;
+- optional raw accepted hits, offset peaks, and per-second density.
 
-## Papercuts you must NOT reproduce (anti-requirements)
+`verify` must preserve exact reference sets and integer scores on all 22 oracle questions. Times may
+differ by at most 0.02 seconds and factors by at most 0.001. A fixture disagreement is a regression
+unless a deliberate compatibility change is recorded in `DECISIONS.md` with a replacement oracle.
 
-Catalogued from production scar tissue; each is a design input:
+`multi_line` is off by default. When enabled, the unchanged voter repeatedly peels accepted lines
+from the residual hit cloud and returns every surviving line in stable score order. This is
+additive evidence for blends and repeated offsets, not part of default jar parity.
 
-1. **Single-process law**: the jar cannot share its store — two concurrent processes degrade
-   both. You: any number of concurrent readers, always.
-2. **Read-only impossible**: the jar opens its store RW unconditionally (fails on ro mounts).
-   You: reads never require write access to anything.
-3. **Silent empty store**: wrong path ⇒ the jar happily reports zero matches. You: absent /
-   empty / version-mismatched store = loud typed error.
-4. **Config drift hazards**: behavior steered by env-var/config-file archaeology, silent
-   strategy defaults. You: explicit args; the store manifest pins the fingerprint-config it
-   was built under; a probe or dump claiming a different config is rejected (`config_mismatch`).
-5. **Non-idempotent ingest**: the jar's re-store doubles postings. You: ingest of an
-   already-present resource key with identical content is a no-op; with different content, an
-   explicit error unless `replace: true`.
-6. **JVM ceremony**: no reflection flags, no GC tuning, no startup cost worth caching around.
+## Stored-resource questions
 
-## Extraction — the second deliverable (shed the dependency across the board)
+`span` compares one stored A window with one B resource. `crosscheck` compares A with a target store
+and may rank references. Their compatibility geometry is independent, non-overlapping 30-second A
+regions. They emit local segments and do not stitch them.
 
-The mission is full independence from Panako AND the Gaborator, not just the matcher. After
-the matcher gate is green, build the extraction lane per ENGINE-FACTS.md §extraction: audio in
-(decode/resample may shell to ffmpeg, or use established pure-Rust crates — your call) →
-log-frequency transform → event-point picking → triplet pairing → **Panako's exact hash
-packing** (§hash — keeping the hash and config pin is what keeps stores interoperable and
-jar-A/B possible). New verbs: `extract` (audio path → prints) and `enroll` (audio path →
-extract + ingest).
+A and B may be separate immutable stores only when their configuration identities agree. Source
+keys resolve in A; target keys resolve in B. An unknown key is an error, not an empty answer.
 
-**Bit-exactness with Panako's prints is explicitly NOT required** (ruled by the owner: a full
-re-fingerprint of the corpus is an acceptable cutover). The acceptance standard is two-tier,
-against the fixture windows' audio (`queries/*/window.wav`, 44.1 kHz mono, pre-decoded):
+The required behavioral checks are:
 
-- **Print-tier**: extract each window; compare against the jar's own prints for the same file
-  (`prints.tdb`). Report per-window print-set overlap (a hash+t-proximity match fraction).
-  Target: high overlap (think majority-to-most, not all); report the number, don't chase 100%.
-- **Match-tier (the one that matters)**: feed YOUR extracted prints into YOUR matcher against
-  the fixture store; compare answers with golden.json at the level that decides real
-  questions: same references found, spans overlapping the golden spans, scores the same order
-  of magnitude. Perfect row-equality is not expected (different peaks ⇒ different hit counts).
+1. a resource window matches itself on the identity diagonal;
+2. known shared fixture material agrees with the match oracle's cross-references;
+3. split-store and same-store answers agree when their relevant fingerprints are identical;
+4. pair-restricted shard lookup emits the exact segment set of the all-shard reference path;
+5. every result is deterministic and stable-ordered.
 
-Timebox honesty: matcher parity is the hard requirement of this build; extraction is built
-second and reported honestly in REPORT.md if unfinished — a clean, tested extract lane at 80%
-overlap beats an unfinished everything.
+## Passage observations
 
-## Scope boundaries (see docs/SCOPE.md for the full list)
+`passages` and `discover` turn local multiline evidence into record-grained, directional
+observations. They use the versioned `passage-v3` profile:
 
-Only the subset we use: STRATEGY=PANAKO semantics under the one pinned config in
-ENGINE-FACTS.md §config. No OLAF, no monitor/sync mode, no IDF. **Boundary awareness is a
-feature**: paths outside the subset return `unsupported` errors naming what was asked; nothing
-silently approximates.
+- 12-second A regions on an 8-second hop, anchored at zero;
+- exact hit deduplication across overlapping regions;
+- support runs split when either clock lacks an accepted hit for more than 1.5 seconds;
+- ordinary stitching across at most 20 seconds when offset and factor tolerances hold;
+- locked-offset stitching across at most 30 seconds under tighter tolerances;
+- explicit support spans, so bridged holes are never reported as matched audio;
+- contained weak residual lines retained as alternates instead of top-level questions;
+- strong or non-contained concurrent alignments retained as primary passages;
+- conservative `same_audio_candidate` marking for near-total, zero-offset, unit-factor diagonals.
 
-One structural allowance for known future work (design for, don't build):
-- **Multi-line matches**: the jar votes ONE dominant time-offset line per (query, ref) and
-  deletes the rest of the hit cloud as noise — which erases DJ blends/doubles. v0 emits
-  jar-parity single lines (the oracle demands it), but structure the voter so ranked secondary
-  lines can be emitted later behind a flag; don't bake single-line-ness into wire shapes
-  (rows are already a list per reference).
+Passage output proves presence only. It does not prove exclusivity, classify an overlay, name the
+audio, merge human identities, or bless same-audio revisions. The request remains directional;
+absence of B→A cannot reject a surviving A→B observation.
 
-## Iteration ethos
+A passage ID is derived from the passage profile, config identity, endpoint keys and prints-only
+content hashes, and support geometry. It excludes mutable metadata and volatile quality summaries.
+Changing identity-affecting geometry requires a new passage profile.
 
-This engine will be worked on hard after handover. Optimize for change: small modules, plain
-code on the hot path, abstractions only where two call sites already demand them, and every
-non-obvious choice logged in DECISIONS.md. No CI yet (it will come) — `./check.sh` is the gate.
+`discover` exhaustively evaluates its stated target set without a top-*k* cutoff. The exact source
+key and caller-supplied exclusions are omitted. A consumer that wants direction-unioned corpus
+observations schedules the inverse enrollment fan-out separately and preserves both provenances.
+
+## Extraction
+
+The native extraction lane performs:
+
+1. ffmpeg decode/resample to signed mono 16 kHz PCM;
+2. the pinned log-frequency transform;
+3. Panako-compatible event selection;
+4. triplet construction;
+5. exact 34-bit landmark hash packing.
+
+Decoded PCM is spooled to an auto-deleting file and processed in overlapping bounded cores.
+Auxiliary memory is independent of audio duration. Events and prints are emitted in canonical
+order. Concurrent requests share immutable FFT plans but not mutable scratch.
+
+Bit identity with Panako extraction is not required. Acceptance is answer-faithful and measured at
+three levels:
+
+- print-set overlap against the same decoded windows;
+- time/frequency anchor overlap;
+- downstream reference and span recovery through Resident's matcher.
+
+`validate-stream` additionally requires the bounded implementation to equal its whole-input
+reference byte-for-byte on every fixture window and across an internal core boundary/final flush.
+
+## Batch production and comparison
+
+`refingerprint` consumes a strict JSONL corpus manifest. It binds the output directory to the exact
+manifest bytes, writes each print file atomically before its metadata completion marker, validates
+completed work on resume, retries incomplete resources, and emits deterministic failure records.
+`--jobs` is a hard extraction concurrency bound.
+
+`ab-compare` records both immutable store generations and compares answer sets, span overlap, and
+score drift for external print probes or stored-resource windows. Evidence can be attached to a
+named question. Store replacement is accepted by answer-faithful cohort review, not by shard or
+print byte equality.
+
+## Output doctrine
+
+- Emit measurements, not human conclusions.
+- Preserve raw local segments in compatibility APIs; passage stitching belongs only to the
+  explicitly versioned passage API.
+- Do not turn scores into probabilities.
+- Do not infer negative evidence from a missing reverse match.
+- Do not force single occupancy: simultaneous alignments are legal.
+- Do not hide duplicate-encoding candidates before a caller blesses their revision relation.
+- Make granular evidence opt-in so default and corpus-wide responses remain tractable.
+- Return typed errors for every failure mode; empty results mean the question ran successfully.
+- Keep stdout machine-readable and reserve stderr for diagnostics.
+
+## Unsupported work
+
+Resident supports only the pinned Panako strategy/configuration. It does not implement OLAF,
+monitor/sync mode, rarity weighting, song metadata, human canon, recurrence-class governance,
+set/track containment, overlay classification, source separation, or a multi-user review workflow.
+Out-of-scope protocol requests fail as `unsupported`; they are never silently approximated.
+
+The detailed boundary is maintained in `docs/SCOPE.md`.

@@ -94,7 +94,7 @@ segment/support counts, factor ranges, and minimum `sec_with_match`. Envelopes d
 that holes matched; only `support` does. All observations are presence evidence and non-exclusive:
 a passage saying B is present underneath A does not say that no overlay is present.
 
-Passage mode replays the production identify geometry: 12-second query regions on an 8-second hop,
+Passage mode uses 12-second query regions on an 8-second hop,
 anchored at zero. Overlapping regions may repeat exact hits; the quality count deduplicates them.
 The engine always uses evidence-bearing multiline matching internally. `evidence:true` additionally
 returns the accepted raw region `segments` for diagnosis; passage identity is unchanged by the flag.
@@ -200,6 +200,7 @@ No store interaction.
 
 Same store generation + same request ⇒ byte-identical response (modulo `id`). Stable sort
 orders everywhere; ties broken by key. This is load-bearing for fixture verification and for
-the consumer's snapshot-diff workflows. A `passage_id` is derived from the profile, config,
-both endpoint keys and content hashes, support geometry, and factor ranges. It therefore remains
-stable across unrelated store-generation changes while the response still records both snapshots.
+consumer snapshot-diff workflows. A `passage_id` is derived from the profile, config, both endpoint
+keys and content hashes, and support geometry (including span hits). It excludes mutable duration
+metadata, scores, and factor extrema. It therefore remains stable across unrelated store-generation
+changes while the response still records both snapshots.
