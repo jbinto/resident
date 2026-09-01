@@ -192,6 +192,8 @@ fn process_line(state: &State, line: &str) -> Value {
             | "match"
             | "span"
             | "crosscheck"
+            | "passages"
+            | "discover"
             | "ingest"
             | "retire"
             | "stats"
@@ -663,5 +665,21 @@ mod tests {
         };
         assert!(b_store.is_none());
         assert!(!evidence);
+    }
+
+    #[test]
+    fn passage_verbs_reach_dispatch() {
+        let state = State {
+            root: PathBuf::from("absent"),
+            store: RwLock::new(None),
+            writer: Mutex::new(()),
+        };
+        for request in [
+            r#"{"id":"p","verb":"passages","a_key":"a","b_key":"b"}"#,
+            r#"{"id":"d","verb":"discover","a_key":"a","targets":"all"}"#,
+        ] {
+            let response = process_line(&state, request);
+            assert_eq!(response["error"]["kind"], "store_missing");
+        }
     }
 }
