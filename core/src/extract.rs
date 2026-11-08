@@ -41,7 +41,6 @@ thread_local! {
 struct AnalysisSpectrum {
     bins: Vec<Complex32>,
     fft_size: usize,
-    inverse: Arc<dyn Fft<f32>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -265,13 +264,9 @@ fn analysis_spectrum(samples: &[f32]) -> AnalysisSpectrum {
     for (output, &sample) in bins.iter_mut().zip(samples) {
         output.re = sample;
     }
-    let (forward, inverse) = fft_plans(fft_size);
+    let (forward, _) = fft_plans(fft_size);
     process_fft(&forward, &mut bins);
-    AnalysisSpectrum {
-        bins,
-        fft_size,
-        inverse,
-    }
+    AnalysisSpectrum { bins, fft_size }
 }
 
 fn fft_plans(fft_size: usize) -> (Arc<dyn Fft<f32>>, Arc<dyn Fft<f32>>) {
@@ -307,25 +302,6 @@ fn band_magnitudes(
     let frequency = MAX_FREQUENCY_HZ * 2_f64.powf(-((band + 1) as f64) / BANDS_PER_OCTAVE);
     let frequency_sd = frequency * (2_f64.powf(1.0 / BANDS_PER_OCTAVE) - 1.0);
     let support_sd = (-2.0 * (GABORATOR_MAX_ERROR * 0.5).ln()).sqrt();
-    let mut filtered = spectrum.bins.clone();
-    for (index, value) in filtered.iter_mut().enumerate() {
-        let bin_hz = if index <= spectrum.fft_size / 2 {
-            index as f64 * f64::from(SAMPLE_RATE) / spectrum.fft_size as f64
-        } else {
-            -((spectrum.fft_size - index) as f64) * f64::from(SAMPLE_RATE)
-                / spectrum.fft_size as f64
-        };
-        let distance_sd = (bin_hz - frequency) / frequency_sd;
-        // Gaborator sizes the short spectrum from the requested support, then evaluates
-        // Gaussian values across twice that support instead of hard-truncating at the budget.
-        if distance_sd.abs() > 2.0 * support_sd {
-            *value = Complex32::zero();
-        } else {
-            *value *= (-0.5 * distance_sd * distance_sd).exp() as f32;
-        }
-    }
-    process_fft(&spectrum.inverse, &mut filtered);
-
     let two_sided_support = 2.0 * support_sd * frequency_sd / f64::from(SAMPLE_RATE);
     let mut native_step = 1;
     let mut scaled_support = two_sided_support;
@@ -339,12 +315,40 @@ fn band_magnitudes(
         .div_ceil(native_step)
         .max(1)
         .saturating_mul(native_step);
+    if first_sample >= input_stop {
+        return magnitudes;
+    }
+    // Only every `native_step`-th sample of the band-filtered signal is read, and the filter is
+    // nonzero over a narrow run of bins. Sampling x[r + n*s] of a length-N inverse DFT equals a
+    // length-N/s inverse DFT of the spectrum phase-shifted by r and folded modulo N/s, so each
+    // band costs one small FFT instead of a full 2^18 one (FAST-BANDS; exact up to f32 rounding).
+    let n = spectrum.fft_size;
+    let m = n / native_step;
+    let r = (first_sample - input_start) % native_step;
+    let hz_per_bin = f64::from(SAMPLE_RATE) / n as f64;
+    let reach = 2.0 * support_sd * frequency_sd;
+    let k_lo = (((frequency - reach) / hz_per_bin).floor() as i64 - 1).max(0) as usize;
+    let k_hi = ((((frequency + reach) / hz_per_bin).ceil() as i64 + 1).max(0) as usize).min(n / 2);
+    let mut folded = vec![Complex32::zero(); m];
+    for k in k_lo..=k_hi {
+        let bin_hz = k as f64 * hz_per_bin;
+        let distance_sd = (bin_hz - frequency) / frequency_sd;
+        if distance_sd.abs() > 2.0 * support_sd {
+            continue;
+        }
+        let value = spectrum.bins[k] * (-0.5 * distance_sd * distance_sd).exp() as f32;
+        let phase = 2.0 * std::f64::consts::PI * ((k as u64 * r as u64) % n as u64) as f64 / n as f64;
+        let rot = Complex32::new(phase.cos() as f32, phase.sin() as f32);
+        folded[k % m] += value * rot;
+    }
+    let (_, inverse) = fft_plans(m);
+    process_fft(&inverse, &mut folded);
     for sample in (first_sample..input_stop).step_by(native_step) {
         let frame = sample / HOP;
         if frame > 0 {
             let output = frame - 1;
             if (output_start..output_stop).contains(&output) {
-                let magnitude = filtered[sample - input_start].norm();
+                let magnitude = folded[(sample - input_start - r) / native_step].norm();
                 let slot = &mut magnitudes[output - output_start];
                 *slot = slot.max(magnitude);
             }
