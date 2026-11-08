@@ -920,8 +920,12 @@ impl Shard {
 fn write_shard(
     root: &Path,
     number: u32,
-    resources: Vec<(u32, DumpResource)>,
+    mut resources: Vec<(u32, DumpResource)>,
 ) -> Result<(ShardInfo, Vec<ResourceInfo>)> {
+    // Forward postings are laid out sorted by resource id (below), so forward_start must be
+    // assigned in id order too. A fresh build hands resources in key order with ids in key order;
+    // an append gives new keys higher ids that may sort before existing keys (APPEND-ORDER).
+    resources.sort_by_key(|(id, _)| *id);
     let mut postings = Vec::new();
     let mut infos = Vec::new();
     for (id, resource) in resources {
@@ -1314,6 +1318,22 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(store.stats().postings, 4);
+    }
+
+    #[test]
+    fn append_with_a_key_that_sorts_first_keeps_forward_ranges() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        // Two keys in one shard where the later-appended key sorts first.
+        let (first, second) = (0..10_000)
+            .flat_map(|i| (0..i).map(move |j| (format!("k{i}"), format!("k{j}"))))
+            .find(|(a, b)| shard_for_key(a) == shard_for_key(b) && b < a)
+            .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        Store::build(root.path(), vec![resource(&first, &[(10, 1, 2), (11, 2, 2)])]).unwrap();
+        let (store, _) =
+            Store::ingest(root.path(), vec![resource(&second, &[(20, 3, 4)])], false).unwrap();
+        assert_eq!(store.forward(&first, None).unwrap().len(), 2);
+        assert_eq!(store.forward(&second, None).unwrap(), vec![Fingerprint::new(20, 3, 4)]);
     }
 
     #[test]
