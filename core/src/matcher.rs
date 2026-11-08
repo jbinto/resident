@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     HIT_PART_DIVIDER, HIT_PART_MAX_SIZE, MAX_FREQUENCY_FACTOR, MAX_TIME_FACTOR,
-    MIN_FREQUENCY_FACTOR, MIN_HITS_FILTERED_EXCLUSIVE, MIN_HITS_UNFILTERED,
-    MIN_MATCH_DURATION_SECONDS, MIN_SECONDS_WITH_MATCH, MIN_TIME_FACTOR, bin_to_hz,
+    MIN_FREQUENCY_FACTOR, MIN_SECONDS_WITH_MATCH, MIN_TIME_FACTOR, QUERY_PROFILE, bin_to_hz,
     bins_to_seconds,
 };
 use crate::store::StoredHit;
@@ -200,7 +199,7 @@ impl<'a> Matcher<'a> {
             let candidates: Vec<_> = by_resource
                 .into_par_iter()
                 .filter_map(|(resource_id, hits)| {
-                    (hits.len() >= MIN_HITS_UNFILTERED).then_some((resource_id, hits))
+                    (hits.len() >= QUERY_PROFILE.min_hits_unfiltered).then_some((resource_id, hits))
                 })
                 .map(|(resource_id, hits)| self.vote_lines(resource_id, hits, k, include_evidence))
                 .collect();
@@ -211,7 +210,7 @@ impl<'a> Matcher<'a> {
             let candidates: Vec<_> = by_resource
                 .into_par_iter()
                 .filter_map(|(resource_id, hits)| {
-                    (hits.len() >= MIN_HITS_UNFILTERED).then_some((resource_id, hits))
+                    (hits.len() >= QUERY_PROFILE.min_hits_unfiltered).then_some((resource_id, hits))
                 })
                 .map(|(resource_id, hits)| self.vote(resource_id, hits, include_evidence))
                 .collect();
@@ -240,7 +239,7 @@ impl<'a> Matcher<'a> {
         include_evidence: bool,
     ) -> Result<Vec<MatchRow>> {
         let mut rows = Vec::new();
-        while remaining.len() >= MIN_HITS_UNFILTERED && rows.len() < limit {
+        while remaining.len() >= QUERY_PROFILE.min_hits_unfiltered && rows.len() < limit {
             let Some(mut row) = self.vote(resource_id, remaining.clone(), true)? else {
                 break;
             };
@@ -282,7 +281,7 @@ impl<'a> Matcher<'a> {
     ) -> Result<Option<MatchRow>> {
         hits.sort_by_key(|hit| hit.q_t);
         let part_len =
-            HIT_PART_MAX_SIZE.min(MIN_HITS_UNFILTERED.max(hits.len() / HIT_PART_DIVIDER));
+            HIT_PART_MAX_SIZE.min(QUERY_PROFILE.min_hits_unfiltered.max(hits.len() / HIT_PART_DIVIDER));
         let first = &hits[..part_len];
         let last = &hits[hits.len() - part_len..];
         let y1 = modal_delta(first);
@@ -319,14 +318,14 @@ impl<'a> Matcher<'a> {
                 (hit.delta() as f32 - predicted).abs() <= crate::config::QUERY_RANGE as f32
             })
             .collect();
-        if filtered.len() <= MIN_HITS_FILTERED_EXCLUSIVE {
+        if filtered.len() <= QUERY_PROFILE.min_hits_filtered_exclusive {
             return Ok(None);
         }
         let first = filtered.first().expect("nonempty filtered hits");
         let last = filtered.last().expect("nonempty filtered hits");
         let q_start = bins_to_seconds(first.q_t);
         let q_stop = bins_to_seconds(last.q_t);
-        if q_stop - q_start < MIN_MATCH_DURATION_SECONDS {
+        if q_stop - q_start < QUERY_PROFILE.min_match_duration_seconds {
             return Ok(None);
         }
         let ref_start = bins_to_seconds(first.ref_t);

@@ -194,7 +194,11 @@ fn parse_manifest(path: &Path, bytes: &[u8]) -> anyhow::Result<Vec<WorkItem>> {
             );
         }
         let id = u32::try_from(line_number).context("manifest has more than u32::MAX lines")?;
-        let audio_path = if parsed.audio_path.is_absolute() {
+        // An ffmpeg input that is not a file path (an https URL, or `concat:a|b` for a
+        // multi-part night) goes to ffmpeg verbatim instead of being joined to the manifest dir.
+        let raw = parsed.audio_path.to_string_lossy();
+        let ffmpeg_input = raw.contains("://") || raw.starts_with("concat:");
+        let audio_path = if parsed.audio_path.is_absolute() || ffmpeg_input {
             parsed.audio_path
         } else {
             base.join(parsed.audio_path)

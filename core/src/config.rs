@@ -29,6 +29,35 @@ const IDENTITY: &str = concat!(
     "hits=10:5;duration=5;coverage=.2;time-factor=.8:1.2;freq-factor=.8:1.2"
 );
 
+/// Query-time gates. Extraction identity (`config_id`) never changes; a query profile
+/// may loosen these via `RESIDENT_QUERY_PROFILE="min_dur=2,min_hits=6,min_filtered=4"`.
+#[derive(Clone, Copy, Debug)]
+pub struct QueryProfile {
+    pub min_hits_unfiltered: usize,
+    pub min_hits_filtered_exclusive: usize,
+    pub min_match_duration_seconds: f64,
+}
+
+pub static QUERY_PROFILE: std::sync::LazyLock<QueryProfile> = std::sync::LazyLock::new(|| {
+    let mut p = QueryProfile {
+        min_hits_unfiltered: MIN_HITS_UNFILTERED,
+        min_hits_filtered_exclusive: MIN_HITS_FILTERED_EXCLUSIVE,
+        min_match_duration_seconds: MIN_MATCH_DURATION_SECONDS,
+    };
+    if let Ok(spec) = std::env::var("RESIDENT_QUERY_PROFILE") {
+        for kv in spec.split(',').filter(|s| !s.is_empty()) {
+            let (k, v) = kv.split_once('=').expect("RESIDENT_QUERY_PROFILE: key=value");
+            match k {
+                "min_dur" => p.min_match_duration_seconds = v.parse().expect("min_dur"),
+                "min_hits" => p.min_hits_unfiltered = v.parse().expect("min_hits"),
+                "min_filtered" => p.min_hits_filtered_exclusive = v.parse().expect("min_filtered"),
+                other => panic!("RESIDENT_QUERY_PROFILE: unknown key {other}"),
+            }
+        }
+    }
+    p
+});
+
 pub fn config_id() -> String {
     hex::encode(Sha256::digest(IDENTITY.as_bytes()))
 }
