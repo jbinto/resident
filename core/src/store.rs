@@ -718,8 +718,13 @@ impl Store {
         retired_key: Option<&str>,
     ) -> Result<Manifest> {
         let mut manifest = self.manifest.clone();
+        // Every resource in a rewritten shard is re-described by write_shard below, so drop its
+        // old entry here too, not only the changed keys (APPEND-DUPES: shard-mates of an appended
+        // key were listed twice, with a stale forward_start beside the fresh one).
         manifest.resources.retain(|resource| {
-            Some(resource.key.as_str()) != retired_key && !changes.contains_key(&resource.key)
+            Some(resource.key.as_str()) != retired_key
+                && !changes.contains_key(&resource.key)
+                && !affected.contains(&resource.shard)
         });
         for &number in affected {
             let mut group = Vec::new();
@@ -1334,6 +1339,8 @@ mod tests {
             Store::ingest(root.path(), vec![resource(&second, &[(20, 3, 4)])], false).unwrap();
         assert_eq!(store.forward(&first, None).unwrap().len(), 2);
         assert_eq!(store.forward(&second, None).unwrap(), vec![Fingerprint::new(20, 3, 4)]);
+        assert_eq!(store.manifest.resources.len(), 2, "each key listed once");
+        assert_eq!(store.stats().postings, 3);
     }
 
     #[test]
