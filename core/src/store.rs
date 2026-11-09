@@ -110,6 +110,21 @@ pub struct StoredHit {
     pub matched_hash: u64,
 }
 
+/// Precomputed `Store::lookup` results for a fixed hash set (see `Store::lookup_table`).
+pub struct LookupTable {
+    hashes: Vec<u64>,
+    hits: Vec<StoredHit>,
+    offsets: Vec<usize>,
+}
+
+impl LookupTable {
+    /// The hits `Store::lookup(hash)` returns, or None when `hash` was not in the batch.
+    pub fn get(&self, hash: u64) -> Option<&[StoredHit]> {
+        let index = self.hashes.binary_search(&hash).ok()?;
+        Some(&self.hits[self.offsets[index]..self.offsets[index + 1]])
+    }
+}
+
 struct Shard {
     map: MappedFile,
     forward_offset: u64,
@@ -675,6 +690,44 @@ impl Store {
         Ok(hits)
     }
 
+    /// Batched `lookup`: the same hits in the same order for every hash, gathered by walking
+    /// each shard once over the ascending, deduplicated hash set. A whole-night discover asks
+    /// ~10^5 hashes; per-hash lookups cost 64 cold binary searches each (shards partition
+    /// resources, not hashes), while a sorted walk keeps each shard's index pages warm.
+    pub fn lookup_table(&self, hashes: &[u64]) -> Result<LookupTable> {
+        let mut hashes: Vec<u64> = hashes
+            .iter()
+            .copied()
+            .filter(|hash| *hash <= MAX_HASH)
+            .collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        let per_shard: Vec<Result<(Vec<StoredHit>, Vec<usize>)>> = {
+            use rayon::prelude::*;
+            self.shards
+                .par_iter()
+                .map(|shard| shard.lookup_sorted(&hashes))
+                .collect()
+        };
+        let per_shard = per_shard.into_iter().collect::<Result<Vec<_>>>()?;
+        let total: usize = per_shard.iter().map(|(hits, _)| hits.len()).sum();
+        let mut hits = Vec::with_capacity(total);
+        let mut offsets = Vec::with_capacity(hashes.len() + 1);
+        for index in 0..hashes.len() {
+            offsets.push(hits.len());
+            // Shard order, as `lookup` appends them.
+            for (shard_hits, shard_offsets) in &per_shard {
+                hits.extend_from_slice(&shard_hits[shard_offsets[index]..shard_offsets[index + 1]]);
+            }
+        }
+        offsets.push(hits.len());
+        Ok(LookupTable {
+            hashes,
+            hits,
+            offsets,
+        })
+    }
+
     /// Whether the compatibility lookup range occurs anywhere in the store. Pair matching needs
     /// this global shape to reproduce Panako's hash-map iteration capacity, even though only the
     /// named target's postings may enter its voter.
@@ -866,7 +919,13 @@ impl Shard {
     }
 
     fn lookup_range(&self, start: u64, stop: u64, out: &mut Vec<StoredHit>) -> Result<()> {
-        let mut index = self.lower_bound(start)?;
+        let index = self.lower_bound(start)?;
+        self.scan_from(index, stop, out)
+    }
+
+    /// Append every hit whose hash lies in `[hash_at(index), stop]`, starting at a known lower
+    /// bound. Shared by the single and the batched lookup so both emit identical hit order.
+    fn scan_from(&self, mut index: u64, stop: u64, out: &mut Vec<StoredHit>) -> Result<()> {
         while index < self.hash_count {
             let base = self.hash_index_offset + index * HASH_INDEX_SIZE;
             let hash = read_u64(&self.map, base as usize)?;
@@ -893,6 +952,58 @@ impl Shard {
             index += 1;
         }
         Ok(())
+    }
+
+    /// Lower bound of `hash` searching only at or after `from`, which must itself be at or before
+    /// the answer. Gallops forward then bisects, so ascending queries touch nearby index pages
+    /// instead of re-walking the whole index from the root each time.
+    fn lower_bound_from(&self, hash: u64, from: u64) -> Result<u64> {
+        if from >= self.hash_count || self.index_hash(from)? >= hash {
+            return Ok(from);
+        }
+        // Invariant: index_hash(low) < hash; the answer is in (low, high].
+        let mut low = from;
+        let mut step = 1;
+        let mut high = loop {
+            let probe = from.saturating_add(step);
+            if probe >= self.hash_count {
+                break self.hash_count;
+            }
+            if self.index_hash(probe)? >= hash {
+                break probe;
+            }
+            low = probe;
+            step = step.saturating_mul(2);
+        };
+        low += 1;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if self.index_hash(middle)? < hash {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        Ok(high)
+    }
+
+    /// Hits for each of `hashes` (ascending, each <= MAX_HASH) in this shard, flattened:
+    /// hits for `hashes[i]` are `hits[offsets[i]..offsets[i + 1]]`.
+    fn lookup_sorted(&self, hashes: &[u64]) -> Result<(Vec<StoredHit>, Vec<usize>)> {
+        let mut hits = Vec::new();
+        let mut offsets = Vec::with_capacity(hashes.len() + 1);
+        let mut position = 0;
+        for &hash in hashes {
+            offsets.push(hits.len());
+            let start = hash.saturating_sub(crate::config::QUERY_RANGE);
+            let stop = hash
+                .saturating_add(crate::config::QUERY_RANGE)
+                .min(MAX_HASH);
+            position = self.lower_bound_from(start, position)?;
+            self.scan_from(position, stop, &mut hits)?;
+        }
+        offsets.push(hits.len());
+        Ok((hits, offsets))
     }
 
     fn has_range(&self, start: u64, stop: u64) -> Result<bool> {
@@ -1323,6 +1434,41 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(store.stats().postings, 4);
+    }
+
+    #[test]
+    fn lookup_table_equals_per_hash_lookup() {
+        let _guard = STORE_TEST_LOCK.lock().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        // Many keys spread over shards, dense and sparse hashes, ranges that overlap (+-2).
+        let resources: Vec<_> = (0..40u64)
+            .map(|r| {
+                let prints: Vec<_> = (0..200u64)
+                    .map(|i| {
+                        (
+                            (i * 7 + r * 3) % 900 + if i % 5 == 0 { 1 << 30 } else { 0 },
+                            i as u32,
+                            (r % 7) as u16,
+                        )
+                    })
+                    .collect();
+                resource(&format!("k{r}"), &prints)
+            })
+            .collect();
+        let store = Store::build(root.path(), resources).unwrap();
+        let mut asked: Vec<u64> = (0..1_000)
+            .chain([1 << 30, (1 << 30) + 3, MAX_HASH, MAX_HASH - 1])
+            .collect();
+        asked.extend([5, 5, 900, 0]); // duplicates and unsorted input
+        let table = store.lookup_table(&asked).unwrap();
+        for hash in asked {
+            assert_eq!(
+                table.get(hash).unwrap(),
+                store.lookup(hash).unwrap().as_slice(),
+                "hash {hash}"
+            );
+        }
+        assert!(table.get(MAX_HASH + 1).is_none());
     }
 
     #[test]

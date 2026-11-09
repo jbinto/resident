@@ -266,9 +266,13 @@ pub(crate) fn crosscheck_between_multiline_geometry(
     };
     let regions = region_prints(a_store, a_key, a_window, geometry)?;
     let matcher = Matcher::new(b_store);
+    // Regions overlap (12 s every 8 s), and per-hash lookups over 64 shards dominate discover:
+    // look every distinct hash up once, in one sorted walk per shard.
+    let all_hashes: Vec<u64> = regions.iter().flatten().map(|print| print.hash).collect();
+    let table = b_store.lookup_table(&all_hashes)?;
     let rows: Vec<_> = regions
         .par_iter()
-        .map(|prints| matcher.match_prints_multiline(prints, usize::MAX, evidence))
+        .map(|prints| matcher.match_prints_multiline_with(prints, usize::MAX, evidence, &table))
         .collect();
     // Grouping by reference must retain both chronological region order and the matcher's
     // score rank inside a region; the default b_start ordering would discard that rank.

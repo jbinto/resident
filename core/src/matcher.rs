@@ -8,7 +8,7 @@ use crate::config::{
     MIN_FREQUENCY_FACTOR, MIN_SECONDS_WITH_MATCH, MIN_TIME_FACTOR, QUERY_PROFILE, bin_to_hz,
     bins_to_seconds,
 };
-use crate::store::StoredHit;
+use crate::store::{LookupTable, StoredHit};
 use crate::{Error, Fingerprint, Result, Store};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -98,6 +98,18 @@ impl<'a> Matcher<'a> {
         self.match_restricted(prints, k, include_evidence, true, None)
     }
 
+    /// `match_prints_multiline` with this store's lookups already batched in `table` (built by
+    /// `Store::lookup_table` over a superset of `prints`' hashes); identical results.
+    pub fn match_prints_multiline_with(
+        &self,
+        prints: &[Fingerprint],
+        k: usize,
+        include_evidence: bool,
+        table: &LookupTable,
+    ) -> Result<Vec<MatchRow>> {
+        self.match_restricted_with(prints, k, include_evidence, true, None, Some(table))
+    }
+
     pub fn match_resource(
         &self,
         prints: &[Fingerprint],
@@ -130,6 +142,18 @@ impl<'a> Matcher<'a> {
         multi_line: bool,
         only_resource: Option<u32>,
     ) -> Result<Vec<MatchRow>> {
+        self.match_restricted_with(prints, k, include_evidence, multi_line, only_resource, None)
+    }
+
+    fn match_restricted_with(
+        &self,
+        prints: &[Fingerprint],
+        k: usize,
+        include_evidence: bool,
+        multi_line: bool,
+        only_resource: Option<u32>,
+        table: Option<&LookupTable>,
+    ) -> Result<Vec<MatchRow>> {
         if prints.is_empty() {
             return Err(Error::BadRequest("probe prints must not be empty".into()));
         }
@@ -154,7 +178,10 @@ impl<'a> Matcher<'a> {
             .par_iter()
             .map(|&hash| {
                 let hits = only_resource.map_or_else(
-                    || self.store.lookup(hash),
+                    || match table.and_then(|table| table.get(hash)) {
+                        Some(hits) => Ok(hits.to_vec()),
+                        None => self.store.lookup(hash),
+                    },
                     |resource_id| self.store.lookup_resource(hash, resource_id),
                 )?;
                 let global_present = if only_resource.is_some() {
