@@ -121,6 +121,11 @@ enum Command {
         start: Option<f64>,
         #[arg(long, requires = "start")]
         stop: Option<f64>,
+        /// Several A windows in one process, as `START-STOP,START-STOP` seconds; prints a JSON
+        /// array with one discovery per window, in order. One store open (and one page-in on a
+        /// FUSE mount, which drops the page cache per open) instead of one per window.
+        #[arg(long, conflicts_with_all = ["start", "stop"])]
+        windows: Option<String>,
         /// Include the raw evidence-bearing region lines behind each passage.
         #[arg(long)]
         evidence: bool,
@@ -306,11 +311,32 @@ fn main() -> anyhow::Result<()> {
             exclude_keys,
             start,
             stop,
+            windows,
             evidence,
         } => {
             let store = Store::open(&store)?;
             let target_store = b_store.as_deref().map(Store::open).transpose()?;
             let target_store = target_store.as_ref().unwrap_or(&store);
+            if let Some(windows) = windows {
+                let mut answers = Vec::new();
+                for window in windows.split(',').filter(|window| !window.is_empty()) {
+                    let (start, stop) = window
+                        .split_once('-')
+                        .and_then(|(a, b)| Some((a.parse::<f64>().ok()?, b.parse::<f64>().ok()?)))
+                        .ok_or_else(|| anyhow::anyhow!("bad window {window:?}; want START-STOP"))?;
+                    answers.push(discover_passages_between(
+                        &store,
+                        target_store,
+                        &a_key,
+                        Some((start, stop)),
+                        (!targets.is_empty()).then_some(targets.as_slice()),
+                        (!exclude_keys.is_empty()).then_some(exclude_keys.as_slice()),
+                        evidence,
+                    )?);
+                }
+                println!("{}", serde_json::to_string_pretty(&answers)?);
+                return Ok(());
+            }
             let answer = discover_passages_between(
                 &store,
                 target_store,
