@@ -149,6 +149,10 @@ cargo run --release -- discover \
 the caller has already decided are revisions of A. Until that decision exists, Resident reports a
 near-total zero-offset diagonal as `same_audio_candidate` instead of hiding it.
 
+To discover several A windows of one resource, pass them together as `--windows START-STOP,...`
+(seconds; conflicts with `--start`/`--stop`). The CLI prints a JSON array with one discovery per
+window, in order, each identical to the single-window answer, from one process and one store open.
+
 Validate or rebuild the native extraction lane:
 
 ```sh
