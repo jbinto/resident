@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -289,6 +289,35 @@ fn process_fft(plan: &Arc<dyn Fft<f32>>, values: &mut [Complex32]) {
     });
 }
 
+/// One band's filter taps over its contiguous run of bins from `k0`: window weights and, when the
+/// phase offset `r` is non-zero, the matching rotations.
+struct BandPlan {
+    n: usize,
+    r: usize,
+    k0: usize,
+    weights: Vec<f32>,
+    rots: Vec<Complex32>,
+}
+
+/// Per-process cache of each band's taps for the latest (FFT size, r). Every chunk after the first
+/// shares one r per band, so this holds one plan per band.
+fn band_plan(band: usize, n: usize, r: usize, build: impl FnOnce() -> BandPlan) -> Arc<BandPlan> {
+    static PLANS: OnceLock<Mutex<HashMap<usize, Arc<BandPlan>>>> = OnceLock::new();
+    let plans = PLANS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(plan) = plans.lock().expect("band plan cache").get(&band)
+        && plan.n == n
+        && plan.r == r
+    {
+        return Arc::clone(plan);
+    }
+    let plan = Arc::new(build());
+    plans
+        .lock()
+        .expect("band plan cache")
+        .insert(band, Arc::clone(&plan));
+    plan
+}
+
 fn band_magnitudes(
     spectrum: &AnalysisSpectrum,
     sample_count: usize,
@@ -330,15 +359,48 @@ fn band_magnitudes(
     let k_lo = (((frequency - reach) / hz_per_bin).floor() as i64 - 1).max(0) as usize;
     let k_hi = ((((frequency + reach) / hz_per_bin).ceil() as i64 + 1).max(0) as usize).min(n / 2);
     let mut folded = vec![Complex32::zero(); m];
-    for k in k_lo..=k_hi {
-        let bin_hz = k as f64 * hz_per_bin;
-        let distance_sd = (bin_hz - frequency) / frequency_sd;
-        if distance_sd.abs() > 2.0 * support_sd {
-            continue;
+    // The window weights and phase rotations depend only on (band, FFT size, r), and r is the
+    // same for every chunk after the first, so they are computed once per band and reused: the
+    // same values, in the same operations, as computing them for every chunk.
+    let plan = band_plan(band, n, r, || {
+        let mut plan = BandPlan {
+            n,
+            r,
+            k0: 0,
+            weights: Vec::new(),
+            rots: Vec::new(),
+        };
+        for k in k_lo..=k_hi {
+            let bin_hz = k as f64 * hz_per_bin;
+            let distance_sd = (bin_hz - frequency) / frequency_sd;
+            if distance_sd.abs() > 2.0 * support_sd {
+                continue;
+            }
+            if plan.weights.is_empty() {
+                plan.k0 = k;
+            }
+            // The kept bins are one contiguous run: |distance_sd| grows away from the centre.
+            debug_assert_eq!(k, plan.k0 + plan.weights.len());
+            plan.weights
+                .push((-0.5 * distance_sd * distance_sd).exp() as f32);
+            if r != 0 {
+                let phase = 2.0 * std::f64::consts::PI * ((k as u64 * r as u64) % n as u64) as f64
+                    / n as f64;
+                plan.rots
+                    .push(Complex32::new(phase.cos() as f32, phase.sin() as f32));
+            }
         }
-        let value = spectrum.bins[k] * (-0.5 * distance_sd * distance_sd).exp() as f32;
-        let phase = 2.0 * std::f64::consts::PI * ((k as u64 * r as u64) % n as u64) as f64 / n as f64;
-        let rot = Complex32::new(phase.cos() as f32, phase.sin() as f32);
+        plan
+    });
+    for (index, &weight) in plan.weights.iter().enumerate() {
+        let k = plan.k0 + index;
+        let value = spectrum.bins[k] * weight;
+        // r == 0: phase 0, rotation exactly (1, 0), as cos(0) and sin(0) are exact.
+        let rot = plan
+            .rots
+            .get(index)
+            .copied()
+            .unwrap_or(Complex32::new(1.0, 0.0));
         folded[k % m] += value * rot;
     }
     let (_, inverse) = fft_plans(m);
