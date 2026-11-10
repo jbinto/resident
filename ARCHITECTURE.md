@@ -59,6 +59,12 @@ content-addressed shard. The current and immediately previous manifest are retai
 unreferenced derived shards are removed after publication. Existing mappings remain valid on
 the Linux deployment target even when an old path is unlinked.
 
+Every whole-store build goes through one shard-by-shard path: resources are sorted by key and
+numbered, then each shard's prints are requested only when that shard is written and dropped
+after it. `merge` uses it with the input stores' forward postings as the source. A resource always
+lives in its key-selected shard, so output shard N is written from the inputs' shard N alone. Peak
+memory is about one shard of postings, and the result is byte-identical to a build of the union.
+
 Legacy manifests may contain duration-coupled endpoint hashes. `rehash-identities` scans each
 resource's forward postings, publishes a manifest marked `prints-v1`, and reuses every shard byte.
 Once marked, passage output can read the manifest hash directly; unmarked stores compute the same

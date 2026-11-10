@@ -158,6 +158,19 @@ absence must never erase a surviving forward observation.
 Identical-content re-ingest of a present key: no-op (reported). Different content without
 `replace: true`: error `bad_request`.
 
+### operator-only store merge
+
+```
+resident merge --out NEW_STORE --store A --store B [--store C ...]
+```
+
+Writes a new store at `NEW_STORE`, which must not already hold one, containing every resource of the
+inputs. Keys must be unique across the inputs, or the request is `bad_request` and nothing is
+published. The result is exactly the store that one `ingest` of the union into an empty root would
+build: the same resource ids (key order), shard bytes, manifest and generation. So every query
+answer is the union store's. Inputs are only read. Output:
+`{"store": {...stats...}, "inputs": [{...stats...}, ...]}`.
+
 ### retire
 `{"key": "..."}` → `{"generation": "...", "postings_removed": N}`
 Unknown key: error `bad_request` (never a silent no-op).

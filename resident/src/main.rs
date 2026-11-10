@@ -40,6 +40,16 @@ enum Command {
         #[arg(long)]
         replace: bool,
     },
+    /// Merge whole stores (unique keys) into one new store, one shard at a time; the result is
+    /// the store a single ingest of their union would build.
+    Merge {
+        /// The new store's root; it must not already hold a store.
+        #[arg(long)]
+        out: PathBuf,
+        /// An input store. Repeat for each.
+        #[arg(long = "store", required = true)]
+        stores: Vec<PathBuf>,
+    },
     /// Print store statistics as JSON.
     Stats {
         #[arg(long)]
@@ -234,6 +244,23 @@ fn main() -> anyhow::Result<()> {
             let (_, stats) = Store::ingest(&store, resources, replace)
                 .with_context(|| format!("ingest store {}", store.display()))?;
             println!("{}", serde_json::to_string_pretty(&stats)?);
+        }
+        Command::Merge { out, stores } => {
+            let inputs = stores
+                .iter()
+                .map(|path| {
+                    Store::open(path).with_context(|| format!("open store {}", path.display()))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let merged = Store::merge(&out, &inputs)
+                .with_context(|| format!("merge into {}", out.display()))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "store": merged.stats(),
+                    "inputs": inputs.iter().map(Store::stats).collect::<Vec<_>>(),
+                }))?
+            );
         }
         Command::Stats { store } => {
             let store = Store::open(&store)?;
