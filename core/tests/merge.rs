@@ -1,4 +1,5 @@
-//! STORE-MERGE: merging stores must produce exactly the store one build of their union makes:
+//! STORE-MERGE and BOUNDED-BUILD: merging stores, or building shard by shard from files, must
+//! produce exactly the store one in-memory build of the same resources makes:
 //! the same manifest and the same shard bytes, on real fixture prints.
 
 use std::collections::BTreeMap;
@@ -87,4 +88,24 @@ fn merge_refuses_shared_keys_and_an_existing_output() {
         .err()
         .expect("merge must refuse");
     assert!(matches!(error, Error::BadRequest(ref message) if message.contains("already")));
+}
+
+#[test]
+fn bounded_build_from_files_equals_the_in_memory_build() {
+    let dump = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/store-dump");
+    let temporary = tempfile::tempdir().unwrap();
+    let in_memory = temporary.path().join("in-memory");
+    Store::build(&in_memory, fixture_resources()).unwrap();
+    let bounded = temporary.path().join("bounded");
+    Store::build_from_dump_dir(&bounded, &dump).unwrap();
+    let expected = published_bytes(&in_memory);
+    assert_eq!(expected.len(), 66, "CURRENT, manifest and 64 shards");
+    let found = published_bytes(&bounded);
+    assert_eq!(
+        found.keys().collect::<Vec<_>>(),
+        expected.keys().collect::<Vec<_>>()
+    );
+    for (name, bytes) in &expected {
+        assert!(found[name] == *bytes, "{name} differs");
+    }
 }

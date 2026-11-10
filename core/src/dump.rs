@@ -21,6 +21,21 @@ pub struct DumpResource {
 }
 
 pub fn load_dump_dir(path: &Path) -> Result<Vec<DumpResource>> {
+    scan_dump_dir(path)?
+        .into_iter()
+        .map(|(meta, prints_path)| {
+            let prints = load_declared_prints(&meta, &prints_path)?;
+            Ok(DumpResource {
+                meta,
+                prints,
+                prints_path,
+            })
+        })
+        .collect()
+}
+
+/// A dump directory's metadata and print-file paths, without reading any prints.
+pub fn scan_dump_dir(path: &Path) -> Result<Vec<(ResourceMeta, PathBuf)>> {
     let entries = fs::read_dir(path).map_err(|source| Error::io(path, source))?;
     let mut metadata_paths = Vec::new();
     for entry in entries {
@@ -58,25 +73,26 @@ pub fn load_dump_dir(path: &Path) -> Result<Vec<DumpResource>> {
                     meta_path.display()
                 )));
             };
-            let prints = load_prints(&prints_path)?;
-            if prints.len() as u64 != meta.declared_prints {
-                return Err(Error::InvalidDump {
-                    path: prints_path.clone(),
-                    line: 0,
-                    message: format!(
-                        "metadata declares {} prints, file contains {}",
-                        meta.declared_prints,
-                        prints.len()
-                    ),
-                });
-            }
-            Ok(DumpResource {
-                meta,
-                prints,
-                prints_path,
-            })
+            Ok((meta, prints_path))
         })
         .collect()
+}
+
+/// One resource's prints, checked against the count its metadata declares.
+pub fn load_declared_prints(meta: &ResourceMeta, prints_path: &Path) -> Result<Vec<Fingerprint>> {
+    let prints = load_prints(prints_path)?;
+    if prints.len() as u64 != meta.declared_prints {
+        return Err(Error::InvalidDump {
+            path: prints_path.to_path_buf(),
+            line: 0,
+            message: format!(
+                "metadata declares {} prints, file contains {}",
+                meta.declared_prints,
+                prints.len()
+            ),
+        });
+    }
+    Ok(prints)
 }
 
 pub fn load_metadata(path: &Path) -> Result<ResourceMeta> {
