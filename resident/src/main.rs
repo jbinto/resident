@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use resident_core::{
-    Store, crosscheck_between, crosscheck_between_multiline, discover_passages_between,
-    extract_audio, load_dump_dir, passages_between, span_between, span_between_multiline,
+    Store, candidates, crosscheck_between, crosscheck_between_multiline, discover_passages_between,
+    extract_audio, load_dump_dir, load_prints, passages_between, probe_window, span_between,
+    span_between_multiline,
 };
 
 mod ab_compare;
@@ -49,6 +50,23 @@ enum Command {
         /// An input store. Repeat for each.
         #[arg(long = "store", required = true)]
         stores: Vec<PathBuf>,
+    },
+    /// Rank the stored references a probe contains, with coverage on both sides.
+    Candidates {
+        #[arg(long)]
+        store: PathBuf,
+        /// A probe print file (Panako dump grammar, .tdb or .tdb.zst).
+        #[arg(long, required_unless_present = "audio", conflicts_with = "audio")]
+        prints_path: Option<PathBuf>,
+        /// An audio file to extract first (the window is cut from its prints, keeping context).
+        #[arg(long)]
+        audio: Option<PathBuf>,
+        #[arg(long, requires = "stop")]
+        start: Option<f64>,
+        #[arg(long, requires = "start")]
+        stop: Option<f64>,
+        #[arg(long, default_value_t = 5)]
+        k: usize,
     },
     /// Print store statistics as JSON.
     Stats {
@@ -287,6 +305,27 @@ fn main() -> anyhow::Result<()> {
                     "inputs": inputs.iter().map(Store::stats).collect::<Vec<_>>(),
                 }))?
             );
+        }
+        Command::Candidates {
+            store,
+            prints_path,
+            audio,
+            start,
+            stop,
+            k,
+        } => {
+            let (prints, duration) = match (prints_path, audio) {
+                (Some(path), None) => (load_prints(&path)?, None),
+                (None, Some(audio)) => {
+                    let extraction = extract_audio(&audio)?;
+                    (extraction.prints, Some(extraction.duration))
+                }
+                _ => anyhow::bail!("give exactly one of --prints-path or --audio"),
+            };
+            let (prints, duration) = probe_window(prints, start.zip(stop), duration)?;
+            let store = Store::open(&store)?;
+            let found = candidates(&store, &prints, duration, k)?;
+            println!("{}", serde_json::to_string_pretty(&found)?);
         }
         Command::Stats { store } => {
             let store = Store::open(&store)?;
