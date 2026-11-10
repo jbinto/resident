@@ -143,6 +143,14 @@ pub struct Store {
     shards: Vec<Shard>,
 }
 
+/// A resource whose prints a build reads only when its shard is written; `origin` is the
+/// caller's handle for finding them.
+struct PlannedResource {
+    key: String,
+    duration: f64,
+    origin: usize,
+}
+
 #[derive(Clone, Copy)]
 struct FullPosting {
     hash: u64,
@@ -165,18 +173,85 @@ struct ImmutableResourceFacts {
 
 impl Store {
     pub fn build(root: &Path, resources: Vec<DumpResource>) -> Result<Self> {
-        if resources.is_empty() {
-            return Err(Error::BadRequest("cannot build an empty store".into()));
-        }
-        let mut resources = resources;
-        resources.sort_by(|a, b| a.meta.key.cmp(&b.meta.key));
-        for pair in resources.windows(2) {
-            if pair[0].meta.key == pair[1].meta.key {
+        let planned = resources
+            .iter()
+            .enumerate()
+            .map(|(origin, resource)| PlannedResource {
+                key: resource.meta.key.clone(),
+                duration: resource.meta.duration,
+                origin,
+            })
+            .collect();
+        let mut prints: Vec<Option<Vec<Fingerprint>>> = resources
+            .into_iter()
+            .map(|resource| Some(resource.prints))
+            .collect();
+        Self::build_by_shard(root, planned, |group| {
+            Ok(group
+                .iter()
+                .map(|planned| prints[planned.origin].take().unwrap_or_default())
+                .collect())
+        })
+    }
+
+    /// Merge whole stores into one new store at `root` (STORE-MERGE). Keys must be unique across
+    /// the inputs. The result is the store `build` would make from the union of their resources:
+    /// the same ids, shard bytes, manifest and generation. Every resource stays in its
+    /// key-selected shard, so each output shard is written from the inputs' copies of that shard
+    /// alone, and peak memory is about one shard of postings, not the whole union.
+    pub fn merge(root: &Path, inputs: &[Self]) -> Result<Self> {
+        match Self::open(root) {
+            Err(Error::StoreMissing(_)) => {}
+            Ok(_) => {
                 return Err(Error::BadRequest(format!(
-                    "duplicate resource key {:?}",
-                    pair[0].meta.key
+                    "merge output {} already holds a store",
+                    root.display()
                 )));
             }
+            Err(error) => return Err(error),
+        }
+        let mut planned = Vec::new();
+        let mut owner = Vec::new();
+        for (index, input) in inputs.iter().enumerate() {
+            for resource in input.resources() {
+                planned.push(PlannedResource {
+                    key: resource.key.clone(),
+                    duration: resource.duration,
+                    origin: owner.len(),
+                });
+                owner.push(index);
+            }
+        }
+        Self::build_by_shard(root, planned, |group| {
+            use rayon::prelude::*;
+            group
+                .par_iter()
+                .map(|planned| inputs[owner[planned.origin]].forward(&planned.key, None))
+                .collect()
+        })
+    }
+
+    /// The one build path. Ids follow key order (1-based); each shard's prints are requested
+    /// from `load_shard` only when that shard is written, and dropped after.
+    fn build_by_shard(
+        root: &Path,
+        mut planned: Vec<PlannedResource>,
+        mut load_shard: impl FnMut(&[PlannedResource]) -> Result<Vec<Vec<Fingerprint>>>,
+    ) -> Result<Self> {
+        if planned.is_empty() {
+            return Err(Error::BadRequest("cannot build an empty store".into()));
+        }
+        planned.sort_by(|a, b| a.key.cmp(&b.key));
+        for pair in planned.windows(2) {
+            if pair[0].key == pair[1].key {
+                return Err(Error::BadRequest(format!(
+                    "duplicate resource key {:?}",
+                    pair[0].key
+                )));
+            }
+        }
+        if u32::try_from(planned.len()).is_err() {
+            return Err(Error::BadRequest("too many resources".into()));
         }
 
         fs::create_dir_all(root.join("generations"))
@@ -184,20 +259,45 @@ impl Store {
         fs::create_dir_all(root.join("shards"))
             .map_err(|source| Error::io(root.join("shards"), source))?;
 
-        let mut grouped: BTreeMap<u32, Vec<(u32, DumpResource)>> = BTreeMap::new();
-        for (index, resource) in resources.into_iter().enumerate() {
-            let id = u32::try_from(index + 1)
-                .map_err(|_| Error::BadRequest("too many resources".into()))?;
+        let mut grouped: BTreeMap<u32, Vec<(u32, PlannedResource)>> = BTreeMap::new();
+        for (index, resource) in planned.into_iter().enumerate() {
             grouped
-                .entry(shard_for_key(&resource.meta.key))
+                .entry(shard_for_key(&resource.key))
                 .or_default()
-                .push((id, resource));
+                .push((index as u32 + 1, resource));
         }
 
         let mut resource_infos = Vec::new();
         let mut shard_infos = Vec::new();
         for number in 0..SHARD_COUNT {
             let group = grouped.remove(&number).unwrap_or_default();
+            let (ids, members): (Vec<u32>, Vec<PlannedResource>) = group.into_iter().unzip();
+            let prints = load_shard(&members)?;
+            if prints.len() != members.len() {
+                return Err(Error::Internal(
+                    "shard loader returned the wrong count".into(),
+                ));
+            }
+            let group = ids
+                .into_iter()
+                .zip(members)
+                .zip(prints)
+                .map(|((id, member), prints)| {
+                    (
+                        id,
+                        DumpResource {
+                            meta: crate::ResourceMeta {
+                                source_id: id.to_string(),
+                                declared_prints: prints.len() as u64,
+                                key: member.key,
+                                duration: member.duration,
+                            },
+                            prints,
+                            prints_path: PathBuf::new(),
+                        },
+                    )
+                })
+                .collect();
             let (shard_info, mut infos) = write_shard(root, number, group)?;
             shard_infos.push(shard_info);
             resource_infos.append(&mut infos);
