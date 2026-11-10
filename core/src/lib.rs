@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+pub mod candidates;
 pub mod config;
 pub mod dump;
 pub mod error;
@@ -11,6 +12,7 @@ pub mod passage;
 pub mod span;
 pub mod store;
 
+pub use candidates::{COVERED_FRACTION, Candidate, Relation, candidates, probe_window};
 pub use dump::{
     DumpResource, ResourceMeta, load_declared_prints, load_dump_dir, load_metadata, load_prints,
     scan_dump_dir,

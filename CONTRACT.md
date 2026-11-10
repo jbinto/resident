@@ -46,6 +46,29 @@ default and preserves jar parity when absent/false. When true, accepted lines ar
 each reference's residual hit cloud and the same voter is applied again; ranked secondary rows
 may therefore repeat a `ref_key` at distinct offsets.
 
+### candidates — which references a probe contains, with coverage both ways
+```
+{"prints": [[hash, t, f], ...] | "prints_path": "<.tdb>" | "audio_path": "<file>",
+ "window": [t0, t1] | null, "k": 5}
+```
+→ `{"candidates": [{"ref_key": "...", "matched_hits": N, "query_matched_seconds": s,
+"reference_matched_seconds": s, "query_coverage": f, "reference_coverage": f,
+"offset_seconds": s, "time_factor": f, "pitch_factor": f,
+"relation": "full" | "query_within_reference" | "reference_within_query" | "partial"}, ...]}`
+
+The probe is cut into 30-second regions on its own clock; each region runs the multiline voter
+against the attached store, and lines are grouped by reference. Matched seconds are the union of
+the lines' spans on each clock; coverage divides them by the probe duration (the window's length,
+else the extracted audio's duration, else the prints' extent) and by the reference's duration
+(never less than its last stored print). `offset_seconds`, `time_factor` and `pitch_factor` come
+from the reference's highest-scoring line. `relation` says which sides reach 60% coverage: `full`
+(both), `query_within_reference` (the probe is an excerpt), `reference_within_query` (the probe
+contains the reference), `partial` (neither: an edit, a version, a sample, a short overlap). It is
+geometry, not a verdict on identity; naming stays with the caller. Rows sort by `matched_hits`,
+then key, truncated to `k`. With `audio_path`, the window is cut from the whole file's prints, so
+the window keeps its analysis context. CLI: `resident candidates --store S (--prints-path P |
+--audio A) [--start s --stop s] [--k N]`.
+
 ### span — store-vs-store: A's stored prints over a window, against B
 ```
 {"a_key": "...", "a_window": [t0, t1] | null, "b_key": "...",

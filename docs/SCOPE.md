@@ -9,7 +9,8 @@ instead of being approximated.
 - STRATEGY=PANAKO matching semantics under the single pinned config (ENGINE-FACTS §config).
 - Ingest of Panako plain-text fingerprint dumps; own versioned store (forward + inverted
   orders); generation swap; retire.
-- Verbs: ping · match · span · crosscheck · passages · discover · ingest · retire · stats · extract · enroll
+- Verbs: ping · match · candidates · span · crosscheck · passages · discover · ingest · retire · stats ·
+  extract · enroll
   (CONTRACT.md).
 - Offline `rehash-identities` maintenance publishes prints-only endpoint identities without
   rewriting fingerprints or exposing a concurrent daemon mutation.

@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use resident_core::config::{MAX_FREQUENCY_BIN, MAX_HASH, bins_to_seconds};
 use resident_core::{
-    DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, crosscheck_between,
+    DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, candidates, crosscheck_between,
     crosscheck_between_multiline, discover_passages_between, extract_audio, load_dump_dir,
-    load_prints, passages_between, span_between, span_between_multiline,
+    load_prints, passages_between, probe_window, span_between, span_between_multiline,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,6 +21,18 @@ struct State {
 #[serde(tag = "verb", rename_all = "lowercase")]
 enum Request {
     Ping,
+    Candidates {
+        #[serde(default)]
+        prints: Option<Vec<[u64; 3]>>,
+        #[serde(default)]
+        prints_path: Option<PathBuf>,
+        #[serde(default)]
+        audio_path: Option<PathBuf>,
+        #[serde(default)]
+        window: Option<[f64; 2]>,
+        #[serde(default = "default_candidates_k")]
+        k: usize,
+    },
     Match {
         #[serde(default)]
         prints: Option<Vec<[u64; 3]>>,
@@ -124,6 +136,10 @@ fn default_match_k() -> usize {
     10
 }
 
+fn default_candidates_k() -> usize {
+    5
+}
+
 fn default_crosscheck_k() -> usize {
     25
 }
@@ -201,6 +217,7 @@ fn process_line(state: &State, line: &str) -> Value {
             | "stats"
             | "extract"
             | "enroll"
+            | "candidates"
     ) {
         return error_response(id, &Error::Unsupported(format!("verb {verb:?}")));
     }
@@ -235,6 +252,33 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                 "version": env!("CARGO_PKG_VERSION"),
                 "store": store,
             }))
+        }
+        Request::Candidates {
+            prints,
+            prints_path,
+            audio_path,
+            window,
+            k,
+        } => {
+            let (prints, duration) = match audio_path {
+                Some(audio_path) => {
+                    if prints.is_some() || prints_path.is_some() {
+                        return Err(Error::BadRequest(
+                            "provide exactly one of prints, prints_path or audio_path".into(),
+                        ));
+                    }
+                    let extraction = extract_audio(&audio_path)?;
+                    (extraction.prints, Some(extraction.duration))
+                }
+                None => (wire_prints(prints, prints_path)?, None),
+            };
+            let (prints, duration) = probe_window(
+                prints,
+                window.map(|window| (window[0], window[1])),
+                duration,
+            )?;
+            let store = required_store(state)?;
+            Ok(json!({ "candidates": candidates(&store, &prints, duration, k)? }))
         }
         Request::Match {
             prints,
