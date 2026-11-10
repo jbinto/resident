@@ -239,6 +239,32 @@ fn main() -> anyhow::Result<()> {
             dump_dir,
             replace,
         } => {
+            let missing = matches!(
+                Store::open(&store),
+                Err(resident_core::Error::StoreMissing(_))
+            );
+            if missing {
+                // A first ingest builds shard by shard from the files (bounded memory).
+                let built = Store::build_from_dump_dir(&store, &dump_dir).with_context(|| {
+                    format!(
+                        "build store {} from {}",
+                        store.display(),
+                        dump_dir.display()
+                    )
+                })?;
+                let stats = built.stats();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "generation": stats.generation,
+                        "resources_added": stats.resources,
+                        "resources_replaced": 0,
+                        "resources_unchanged": 0,
+                        "postings_added": stats.postings,
+                    }))?
+                );
+                return Ok(());
+            }
             let resources = load_dump_dir(&dump_dir)
                 .with_context(|| format!("load dump {}", dump_dir.display()))?;
             let (_, stats) = Store::ingest(&store, resources, replace)

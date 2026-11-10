@@ -157,6 +157,10 @@ absence must never erase a surviving forward observation.
 → `{"generation": "...", "resources_added": N, "postings_added": N}`
 Identical-content re-ingest of a present key: no-op (reported). Different content without
 `replace: true`: error `bad_request`.
+CLI `resident ingest --dump-dir` into a root without a store builds shard by shard: it reads
+each resource's prints only when its shard is written, so peak memory is about one shard of
+postings, and the store is byte-identical to an in-memory build. Appends into an existing store
+load the incoming batch whole; build a large batch as its own store and `merge` it instead.
 
 ### operator-only store merge
 

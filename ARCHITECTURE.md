@@ -61,7 +61,9 @@ the Linux deployment target even when an old path is unlinked.
 
 Every whole-store build goes through one shard-by-shard path: resources are sorted by key and
 numbered, then each shard's prints are requested only when that shard is written and dropped
-after it. `merge` uses it with the input stores' forward postings as the source. A resource always
+after it. `merge` uses it with the input stores' forward postings as the source, and a first CLI
+ingest of a dump directory (`build_from_dump_dir`) uses the print files, decoded in parallel per
+shard. A resource always
 lives in its key-selected shard, so output shard N is written from the inputs' shard N alone. Peak
 memory is about one shard of postings, and the result is byte-identical to a build of the union.
 

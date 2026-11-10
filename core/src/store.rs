@@ -231,6 +231,32 @@ impl Store {
         })
     }
 
+    /// `build` from a dump directory, reading each resource's prints only when its shard is
+    /// written (BOUNDED-BUILD): peak memory is about one shard of postings (1/64 of the corpus)
+    /// instead of the whole corpus. Identical store to `build(load_dump_dir(dir))`.
+    pub fn build_from_dump_dir(root: &Path, dump_dir: &Path) -> Result<Self> {
+        let entries = crate::dump::scan_dump_dir(dump_dir)?;
+        let planned = entries
+            .iter()
+            .enumerate()
+            .map(|(origin, (meta, _))| PlannedResource {
+                key: meta.key.clone(),
+                duration: meta.duration,
+                origin,
+            })
+            .collect();
+        Self::build_by_shard(root, planned, |group| {
+            use rayon::prelude::*;
+            group
+                .par_iter()
+                .map(|planned| {
+                    let (meta, path) = &entries[planned.origin];
+                    crate::dump::load_declared_prints(meta, path)
+                })
+                .collect()
+        })
+    }
+
     /// The one build path. Ids follow key order (1-based); each shard's prints are requested
     /// from `load_shard` only when that shard is written, and dropped after.
     fn build_by_shard(
