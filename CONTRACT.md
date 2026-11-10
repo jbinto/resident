@@ -1,7 +1,9 @@
 # CONTRACT — wire protocol v0
 
 JSON-lines over stdin/stdout. One request object per line in; one response object per line out.
-Responses may interleave across requests (concurrent execution) — `id` correlates. stderr is
+Responses may interleave across requests (concurrent execution) — `id` correlates. At most
+`--workers` requests run at once (default: one per CPU thread); further lines wait unread on stdin,
+so a caller may pipe any number of requests without the daemon buffering them. stderr is
 for logs only (never protocol). A future unix-socket transport will reuse these shapes.
 
 ## Envelope

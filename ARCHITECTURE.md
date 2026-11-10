@@ -153,8 +153,14 @@ fact must not change passage identity.
 
 ## Process edge
 
-`resident daemon --store PATH` reads one JSON request per stdin line. Rayon scopes execute
-requests concurrently; a mutex writes each complete JSON response as one stdout line. Readers
+`resident daemon --store PATH [--workers N]` reads one JSON request per stdin line. N plain request
+threads (default: one per Rayon thread) execute requests concurrently, each handing its parallel
+work to the global Rayon pool; a bounded queue of N lines sits between stdin and them, so a caller
+that floods stdin is held back rather than buffered. Requests are never Rayon tasks themselves: a
+Rayon worker blocked in one request's parallel loop would steal the next request and nest it on
+the same stack (a flood of crosschecks overflowed it). It can still steal another in-flight
+request's parallel work, so nesting is bounded by N, not by the backlog. A mutex writes each complete JSON response
+as one stdout line. Readers
 clone an `Arc<Store>` snapshot under a short lock and do not hold the lock while matching.
 Generation writers are serialized, publish a new store, then replace the shared `Arc`; older
 requests finish on their prior mappings. Malformed input and unknown verbs produce typed wire

@@ -187,6 +187,9 @@ enum Command {
     Daemon {
         #[arg(long)]
         store: PathBuf,
+        /// Requests in flight at once (0 = one per CPU thread). More lines wait unread on stdin.
+        #[arg(long, default_value_t = 0)]
+        workers: usize,
     },
     /// Extract native fingerprints from an audio file.
     Extract { audio_path: PathBuf },
@@ -480,7 +483,7 @@ fn main() -> anyhow::Result<()> {
             let (_, stats) = Store::set_durations(&store, &expected_generation, updates)?;
             println!("{}", serde_json::to_string_pretty(&stats)?);
         }
-        Command::Daemon { store } => daemon::run(store)?,
+        Command::Daemon { store, workers } => daemon::run(store, workers)?,
         Command::Extract { audio_path } => {
             let extraction = extract_audio(&audio_path)?;
             let prints: Vec<_> = extraction
