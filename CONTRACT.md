@@ -55,7 +55,8 @@ may therefore repeat a `ref_key` at distinct offsets.
 ```
 → `{"candidates": [{"ref_key": "...", "matched_hits": N, "query_matched_seconds": s,
 "reference_matched_seconds": s, "query_coverage": f, "reference_coverage": f,
-"offset_seconds": s, "time_factor": f, "pitch_factor": f,
+"query_supported_seconds": s, "reference_supported_seconds": s,
+"query_supported_coverage": f, "reference_supported_coverage": f, "offset_seconds": s, "time_factor": f, "pitch_factor": f,
 "relation": "full" | "query_within_reference" | "reference_within_query" | "partial"}, ...]}`
 
 The probe is cut into 30-second regions on its own clock; each region runs the multiline voter
@@ -63,11 +64,14 @@ against the attached store, and lines are grouped by reference. Matched seconds 
 the lines' spans on each clock; coverage divides them by the probe duration (the window's length,
 else the extracted audio's duration, else the prints' extent) and by the reference's duration
 (never less than its last stored print). `offset_seconds`, `time_factor` and `pitch_factor` come
-from the reference's highest-scoring line. `relation` says which sides reach 60% coverage: `full`
-(both), `query_within_reference` (the probe is an excerpt), `reference_within_query` (the probe
-contains the reference), `partial` (neither: an edit, a version, a sample, a short overlap). It is
-geometry, not a verdict on identity; naming stays with the caller. Coverage is span-based (the union of line
-spans), so a sparse line can cover much of a short window; gate on `matched_hits` too. Rows sort by `matched_hits`,
+from the reference's highest-scoring line. Span coverage (`*_coverage`) is the union of the lines'
+first-to-last-hit spans, so a sparse line can span much of a window. Supported coverage
+(`*_supported_*`) counts only seconds inside dense runs of a line's hits (consecutive hits at most
+1.5 s apart on both clocks: the passages' support rule), so a sparse line covers little.
+`relation` says which sides reach 50% supported coverage: `full` (both), `query_within_reference`
+(the probe is an excerpt), `reference_within_query` (the probe contains the reference), `partial`
+(neither: an edit, a version, a sample, a short overlap, a vocal against its instrumental). It is
+geometry, not a verdict on identity; naming stays with the caller. Rows sort by `matched_hits`,
 then key, truncated to `k`. With `audio_path`, the window is cut from the whole file's prints, so
 the window keeps its analysis context. CLI: `resident candidates --store S (--prints-path P |
 --audio A) [--start s --stop s] [--k N]`.
