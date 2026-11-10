@@ -64,7 +64,8 @@ else the extracted audio's duration, else the prints' extent) and by the referen
 from the reference's highest-scoring line. `relation` says which sides reach 60% coverage: `full`
 (both), `query_within_reference` (the probe is an excerpt), `reference_within_query` (the probe
 contains the reference), `partial` (neither: an edit, a version, a sample, a short overlap). It is
-geometry, not a verdict on identity; naming stays with the caller. Rows sort by `matched_hits`,
+geometry, not a verdict on identity; naming stays with the caller. Coverage is span-based (the union of line
+spans), so a sparse line can cover much of a short window; gate on `matched_hits` too. Rows sort by `matched_hits`,
 then key, truncated to `k`. With `audio_path`, the window is cut from the whole file's prints, so
 the window keeps its analysis context. CLI: `resident candidates --store S (--prints-path P |
 --audio A) [--start s --stop s] [--k N]`.
