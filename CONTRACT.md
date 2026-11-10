@@ -66,7 +66,8 @@ Both stores must have the same fingerprint config identity or the request fails 
 ### crosscheck — store-vs-store fan-out: A against many
 ```
 {"a_key": "...", "a_window": [t0, t1] | null, "targets": "all" | ["key", ...],
- "b_store": "/optional/target/store", "k": 25, "evidence": false, "multi_line": false}
+ "b_store": "/optional/target/store", "k": 25, "evidence": false, "multi_line": false,
+ "skip_self": false}
 ```
 → `{"matches": [{"ref_key": "...", "segments": [...as span...], "score_total": int}, ...]}`
 Internally batched/parallel; one request, one response. Sorted score_total-desc, truncated to
@@ -76,6 +77,10 @@ N wire calls.
 keys and `"all"` are resolved only in B. `multi_line` has the same per-region semantics as
 `span`; `k` remains the final reference limit, while every accepted line contributes a
 segment and to that reference's `score_total`.
+`skip_self: true` (CLI `--skip-self`) never votes B's resource whose key equals `a_key`, when B
+has one: a store checked against itself spends nothing on its own diagonal, and `k` counts only
+other references. Every other reference's segments are identical to the unskipped answer, because
+the skipped postings still count toward the global matching-hash population.
 
 ### passages — geometry-bearing evidence for one resource pair
 ```
@@ -133,7 +138,8 @@ resource automatically.
 "supported_seconds":s}, ...]}`
 
 Discovery applies no top-`k` truncation. Matches sort by supported seconds, then deduplicated hits
-and key; the exact self key plus caller-supplied exclusions are omitted. The CLI spells a bounded
+and key; the exact self key plus caller-supplied exclusions are omitted. They are never voted, and
+every other match is identical to what it would be without them, as with crosscheck `skip_self`. The CLI spells a bounded
 target set as repeated `--target KEY` and exclusions as repeated `--exclude-key KEY`. Resident
 cannot prove that differently encoded fingerprints are one logical audio revision; it marks strong
 same-audio candidates and the caller must exclude every sibling key it has already blessed.

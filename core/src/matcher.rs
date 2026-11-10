@@ -73,11 +73,30 @@ impl Hit {
 
 pub struct Matcher<'a> {
     store: &'a Store,
+    /// Resource ids whose hits never reach a voter (sorted). Their postings still count toward
+    /// the global matching-hash population, so every other resource's answer is unchanged.
+    skip: Vec<u32>,
 }
 
 impl<'a> Matcher<'a> {
     pub const fn new(store: &'a Store) -> Self {
-        Self { store }
+        Self {
+            store,
+            skip: Vec::new(),
+        }
+    }
+
+    /// A matcher that never votes the named resources (SELF-SKIP). Keys absent from the store
+    /// are ignored: a probe's own key need not be in the target. Rows for every other resource
+    /// are identical to `new`'s, because skipped postings still mark their hashes present.
+    pub fn skipping(store: &'a Store, keys: &[&str]) -> Self {
+        let mut skip: Vec<u32> = keys
+            .iter()
+            .filter_map(|key| store.resource(key).ok().map(|resource| resource.id))
+            .collect();
+        skip.sort_unstable();
+        skip.dedup();
+        Self { store, skip }
     }
 
     pub fn match_prints(
@@ -203,7 +222,9 @@ impl<'a> Matcher<'a> {
             let query = last_print[&hash];
             let copies = multiplicity[&hash];
             for stored in stored_hits {
-                if only_resource.is_some_and(|id| id != stored.resource_id) {
+                if only_resource.is_some_and(|id| id != stored.resource_id)
+                    || self.skip.binary_search(&stored.resource_id).is_ok()
+                {
                     continue;
                 }
                 let hit = Hit {
@@ -307,8 +328,11 @@ impl<'a> Matcher<'a> {
         include_evidence: bool,
     ) -> Result<Option<MatchRow>> {
         hits.sort_by_key(|hit| hit.q_t);
-        let part_len =
-            HIT_PART_MAX_SIZE.min(QUERY_PROFILE.min_hits_unfiltered.max(hits.len() / HIT_PART_DIVIDER));
+        let part_len = HIT_PART_MAX_SIZE.min(
+            QUERY_PROFILE
+                .min_hits_unfiltered
+                .max(hits.len() / HIT_PART_DIVIDER),
+        );
         let first = &hits[..part_len];
         let last = &hits[hits.len() - part_len..];
         let y1 = modal_delta(first);

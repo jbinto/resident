@@ -84,6 +84,10 @@ enum Command {
         evidence: bool,
         #[arg(long)]
         multi_line: bool,
+        /// Never vote the target resource named `--a-key` (a store checked against itself);
+        /// `k` then counts only other references.
+        #[arg(long)]
+        skip_self: bool,
     },
     /// Form geometry-compatible passages between two stored resources.
     Passages {
@@ -270,14 +274,33 @@ fn main() -> anyhow::Result<()> {
             k,
             evidence,
             multi_line,
+            skip_self,
         } => {
             let store = Store::open(&store)?;
             let target_store = b_store.as_deref().map(Store::open).transpose()?;
             let target_store = target_store.as_ref().unwrap_or(&store);
             let matches = if multi_line {
-                crosscheck_between_multiline(&store, target_store, &a_key, None, None, k, evidence)?
+                crosscheck_between_multiline(
+                    &store,
+                    target_store,
+                    &a_key,
+                    None,
+                    None,
+                    k,
+                    evidence,
+                    skip_self,
+                )?
             } else {
-                crosscheck_between(&store, target_store, &a_key, None, None, k, evidence)?
+                crosscheck_between(
+                    &store,
+                    target_store,
+                    &a_key,
+                    None,
+                    None,
+                    k,
+                    evidence,
+                    skip_self,
+                )?
             };
             println!("{}", serde_json::to_string_pretty(&matches)?);
         }

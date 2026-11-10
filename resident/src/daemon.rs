@@ -58,6 +58,8 @@ enum Request {
         evidence: bool,
         #[serde(default)]
         multi_line: bool,
+        #[serde(default)]
+        skip_self: bool,
     },
     Passages {
         a_key: String,
@@ -278,6 +280,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             k,
             evidence,
             multi_line,
+            skip_self,
         } => {
             let keys = match targets {
                 Targets::All(value) if value == "all" => None,
@@ -301,6 +304,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                     keys.as_deref(),
                     k,
                     evidence,
+                    skip_self,
                 )?
             } else {
                 crosscheck_between(
@@ -311,6 +315,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                     keys.as_deref(),
                     k,
                     evidence,
+                    skip_self,
                 )?
             };
             Ok(json!({ "matches": matches }))

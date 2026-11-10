@@ -1480,11 +1480,18 @@ mod tests {
             .find(|(a, b)| shard_for_key(a) == shard_for_key(b) && b < a)
             .unwrap();
         let root = tempfile::tempdir().unwrap();
-        Store::build(root.path(), vec![resource(&first, &[(10, 1, 2), (11, 2, 2)])]).unwrap();
+        Store::build(
+            root.path(),
+            vec![resource(&first, &[(10, 1, 2), (11, 2, 2)])],
+        )
+        .unwrap();
         let (store, _) =
             Store::ingest(root.path(), vec![resource(&second, &[(20, 3, 4)])], false).unwrap();
         assert_eq!(store.forward(&first, None).unwrap().len(), 2);
-        assert_eq!(store.forward(&second, None).unwrap(), vec![Fingerprint::new(20, 3, 4)]);
+        assert_eq!(
+            store.forward(&second, None).unwrap(),
+            vec![Fingerprint::new(20, 3, 4)]
+        );
         assert_eq!(store.manifest.resources.len(), 2, "each key listed once");
         assert_eq!(store.stats().postings, 3);
     }

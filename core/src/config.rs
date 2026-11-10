@@ -46,7 +46,9 @@ pub static QUERY_PROFILE: std::sync::LazyLock<QueryProfile> = std::sync::LazyLoc
     };
     if let Ok(spec) = std::env::var("RESIDENT_QUERY_PROFILE") {
         for kv in spec.split(',').filter(|s| !s.is_empty()) {
-            let (k, v) = kv.split_once('=').expect("RESIDENT_QUERY_PROFILE: key=value");
+            let (k, v) = kv
+                .split_once('=')
+                .expect("RESIDENT_QUERY_PROFILE: key=value");
             match k {
                 "min_dur" => p.min_match_duration_seconds = v.parse().expect("min_dur"),
                 "min_hits" => p.min_hits_unfiltered = v.parse().expect("min_hits"),
