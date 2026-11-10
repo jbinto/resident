@@ -144,7 +144,16 @@ fn default_crosscheck_k() -> usize {
     25
 }
 
-pub(crate) fn run(root: PathBuf) -> anyhow::Result<()> {
+/// Serve requests with `workers` request threads (0 = one per Rayon thread).
+///
+/// Requests run on plain threads, never as Rayon tasks: a Rayon worker that blocks inside one
+/// request's parallel loop steals other queued Rayon tasks, so per-line Rayon tasks nested whole
+/// requests on one stack until a flood overflowed it. Here each request thread hands its parallel
+/// work to the global Rayon pool and waits, and at most `workers` requests are in flight. A blocked
+/// Rayon worker can still steal another in-flight request's work, so nesting is bounded by
+/// `workers`, not by the backlog. The stdin reader blocks once `workers` more lines are queued, so a
+/// flood is backpressure, not memory.
+pub(crate) fn run(root: PathBuf, workers: usize) -> anyhow::Result<()> {
     let store = match Store::open(&root) {
         Ok(store) => Some(Arc::new(store)),
         Err(Error::StoreMissing(_)) => None,
@@ -155,28 +164,57 @@ pub(crate) fn run(root: PathBuf) -> anyhow::Result<()> {
         store: RwLock::new(store),
         writer: Mutex::new(()),
     });
+    let workers = if workers == 0 {
+        rayon::current_num_threads()
+    } else {
+        workers
+    };
     let output = Arc::new(Mutex::new(BufWriter::new(std::io::stdout())));
-    let input = BufReader::new(std::io::stdin());
-    rayon::scope(|scope| {
-        for line in input.lines() {
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<std::io::Result<String>>(workers);
+    let receiver = Arc::new(Mutex::new(receiver));
+    let threads = (0..workers)
+        .map(|index| {
             let state = Arc::clone(&state);
             let output = Arc::clone(&output);
-            scope.spawn(move |_| {
-                let response = match line {
-                    Ok(line) => process_line(&state, &line),
-                    Err(error) => error_response(
-                        Value::Null,
-                        &Error::BadRequest(format!("read stdin: {error}")),
-                    ),
-                };
-                if let Ok(mut output) = output.lock() {
-                    let _ = serde_json::to_writer(&mut *output, &response);
-                    let _ = output.write_all(b"\n");
-                    let _ = output.flush();
-                }
-            });
+            let receiver = Arc::clone(&receiver);
+            std::thread::Builder::new()
+                .name(format!("request-{index}"))
+                .spawn(move || {
+                    loop {
+                        // The guard is a temporary of this statement: released before the request
+                        // runs, so the other request threads keep taking lines meanwhile.
+                        let line = match receiver.lock() {
+                            Ok(receiver) => receiver.recv(),
+                            Err(_) => return,
+                        };
+                        let Ok(line) = line else { return };
+                        let response = match line {
+                            Ok(line) => process_line(&state, &line),
+                            Err(error) => error_response(
+                                Value::Null,
+                                &Error::BadRequest(format!("read stdin: {error}")),
+                            ),
+                        };
+                        if let Ok(mut output) = output.lock() {
+                            let _ = serde_json::to_writer(&mut *output, &response);
+                            let _ = output.write_all(b"\n");
+                            let _ = output.flush();
+                        }
+                    }
+                })
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    for line in BufReader::new(std::io::stdin()).lines() {
+        if sender.send(line).is_err() {
+            break;
         }
-    });
+    }
+    drop(sender);
+    for thread in threads {
+        if thread.join().is_err() {
+            anyhow::bail!("a request thread panicked");
+        }
+    }
     Ok(())
 }
 
