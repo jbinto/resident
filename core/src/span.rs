@@ -176,9 +176,15 @@ pub fn crosscheck_between(
     let regions = region_prints(a_store, a_key, a_window, COMPATIBILITY_GEOMETRY)?;
     let skip: &[&str] = if skip_self { &[a_key] } else { &[] };
     let matcher = Matcher::skipping(b_store, skip);
+    // One sorted walk per shard for every distinct hash (BATCH-LOOKUP), not 64 binary searches
+    // per hash per region: the same hits in the same order.
+    let all_hashes: Vec<u64> = regions.iter().flatten().map(|print| print.hash).collect();
+    let table = b_store.lookup_table(&all_hashes)?;
     let rows: Vec<_> = regions
         .par_iter()
-        .map(|prints| matcher.match_prints(prints, b_store.resources().len().max(1), evidence))
+        .map(|prints| {
+            matcher.match_prints_with(prints, b_store.resources().len().max(1), evidence, &table)
+        })
         .collect();
     let mut by_key = BTreeMap::<String, Vec<Segment>>::new();
     for rows in rows {
@@ -426,5 +432,42 @@ impl From<crate::MatchRow> for Segment {
             sec_with_match: row.sec_with_match,
             evidence: row.evidence,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CROSSCHECK-BATCH: crosscheck reads its hits from one batched lookup table; every region
+    /// must vote exactly the rows the per-hash lookup path gives, on real fixture prints.
+    #[test]
+    fn batched_crosscheck_regions_equal_per_hash_lookups() {
+        let dump = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/store-dump");
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::build(root.path(), crate::load_dump_dir(&dump).unwrap()).unwrap();
+        let all = store.resources().len();
+        let key = store.resources()[0].key.clone();
+        let window = Some((0.0, 600.0));
+        let regions = region_prints(&store, &key, window, COMPATIBILITY_GEOMETRY).unwrap();
+        let matcher = Matcher::new(&store);
+        let hashes: Vec<u64> = regions.iter().flatten().map(|print| print.hash).collect();
+        let table = store.lookup_table(&hashes).unwrap();
+        let mut rows = 0;
+        for prints in &regions {
+            let per_hash = matcher.match_prints(prints, all, true).unwrap();
+            let batched = matcher
+                .match_prints_with(prints, all, true, &table)
+                .unwrap();
+            assert_eq!(batched, per_hash);
+            rows += per_hash.len();
+        }
+        assert!(
+            rows >= regions.len(),
+            "every region matches at least itself"
+        );
+        // And the public verb is that batched path, grouped.
+        let found = crosscheck(&store, &key, window, None, all, false, false).unwrap();
+        assert_eq!(found[0].ref_key, key);
     }
 }

@@ -117,6 +117,18 @@ impl<'a> Matcher<'a> {
         self.match_restricted(prints, k, include_evidence, true, None)
     }
 
+    /// `match_prints` with this store's lookups already batched in `table` (built by
+    /// `Store::lookup_table` over a superset of `prints`' hashes); identical results.
+    pub fn match_prints_with(
+        &self,
+        prints: &[Fingerprint],
+        k: usize,
+        include_evidence: bool,
+        table: &LookupTable,
+    ) -> Result<Vec<MatchRow>> {
+        self.match_restricted_with(prints, k, include_evidence, false, None, Some(table))
+    }
+
     /// `match_prints_multiline` with this store's lookups already batched in `table` (built by
     /// `Store::lookup_table` over a superset of `prints`' hashes); identical results.
     pub fn match_prints_multiline_with(
