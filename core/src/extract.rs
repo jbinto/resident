@@ -62,11 +62,23 @@ pub fn extract_audio(path: &Path) -> Result<Extraction> {
     Ok(Extraction { prints, duration })
 }
 
+/// How much of ffmpeg's stderr (its end) an extraction error quotes.
+const STDERR_TAIL_BYTES: u64 = 4096;
+
 /// Decode with bounded RAM and emit fingerprints in canonical extraction order.
 pub fn extract_audio_streaming(path: &Path, mut emit: impl FnMut(Fingerprint)) -> Result<f64> {
+    // ffmpeg's stderr goes to an unbounded temporary file, not a pipe. With a pipe, a damaged
+    // input that makes ffmpeg log more than one pipe buffer of decode errors (141 KB of "Header
+    // missing" from one corrupt MP3) blocks ffmpeg on stderr while we block reading stdout: a
+    // deadlock that never ends (STDERR-DRAIN).
+    let mut stderr_file =
+        tempfile::tempfile().map_err(|error| Error::io("temporary ffmpeg stderr", error))?;
+    let stderr_sink = stderr_file
+        .try_clone()
+        .map_err(|error| Error::io("temporary ffmpeg stderr", error))?;
     let mut child = ffmpeg_command(path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::from(stderr_sink))
         .spawn()
         .map_err(|error| {
             Error::BadRequest(format!("start ffmpeg for {}: {error}", path.display()))
@@ -79,13 +91,22 @@ pub fn extract_audio_streaming(path: &Path, mut emit: impl FnMut(Fingerprint)) -
         tempfile::tempfile().map_err(|error| Error::io("temporary PCM spool", error))?;
     let byte_count = std::io::copy(&mut stdout, &mut spool)
         .map_err(|error| Error::io("temporary PCM spool", error))?;
-    let output = child.wait_with_output().map_err(|error| {
+    let status = child.wait().map_err(|error| {
         Error::BadRequest(format!(
             "wait for ffmpeg decoding {}: {error}",
             path.display()
         ))
     })?;
-    validate_ffmpeg_output(path, output.status.success(), &output.stderr, byte_count)?;
+    // Only the tail goes into an error message: a flood can be megabytes.
+    let mut stderr = Vec::new();
+    stderr_file
+        .seek(SeekFrom::End(0))
+        .and_then(|length| {
+            stderr_file.seek(SeekFrom::Start(length.saturating_sub(STDERR_TAIL_BYTES)))
+        })
+        .and_then(|_| stderr_file.read_to_end(&mut stderr))
+        .map_err(|error| Error::io("temporary ffmpeg stderr", error))?;
+    validate_ffmpeg_output(path, status.success(), &stderr, byte_count)?;
     extract_pcm(&mut spool, byte_count / 2, &mut emit)
 }
 
