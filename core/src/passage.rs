@@ -591,7 +591,7 @@ fn passage_from_track(
     })
 }
 
-fn support_from_hits(hits: &[EvidenceHit]) -> Vec<SupportSpan> {
+pub(crate) fn support_from_hits(hits: &[EvidenceHit]) -> Vec<SupportSpan> {
     let mut hits = hits.to_vec();
     hits.sort_by(|a, b| {
         a.q_seconds

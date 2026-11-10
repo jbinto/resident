@@ -1,6 +1,11 @@
 //! CANDIDATES: which stored references a probe contains, and how much of each side the match
 //! covers. A geometric summary over the unchanged multiline voter; naming and judgement stay with
 //! the caller (docs/SCOPE.md).
+//!
+//! Coverage comes two ways. Span coverage is the union of the lines' first-to-last-hit spans: a
+//! sparse line of a few dozen hits can span most of a short window. Supported coverage counts only
+//! seconds inside dense runs of hits, the passages' support rule (consecutive hits at most 1.5 s
+//! apart on both clocks), so a sparse line covers little. `relation` reads supported coverage.
 
 use std::collections::BTreeMap;
 
@@ -8,13 +13,16 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::config::TIME_BIN_SECONDS;
-use crate::{Error, Fingerprint, MatchRow, Matcher, Result, Store};
+use crate::passage::support_from_hits;
+use crate::{Error, Fingerprint, MatchRow, Matcher, Result, Store, SupportSpan};
 
 /// Probe regions, as `crosscheck`'s: each votes independently, so one reference can match at
 /// several offsets and a long probe can hold several references.
 const REGION_SECONDS: f64 = 30.0;
-/// A side counts as covered from this fraction of its duration on.
-pub const COVERED_FRACTION: f64 = 0.6;
+/// A side counts as covered once this fraction of its duration is supported (dense runs of hits).
+/// Measured on a 3,984-file library: same-title duplicates reach 0.58-0.99, a vocal against its own
+/// instrumental or a cappella at most 0.47 (span coverage put many of those at 0.7-0.9).
+pub const COVERED_FRACTION: f64 = 0.5;
 
 /// Which side of the match is (mostly) covered: geometry, not a verdict on identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +48,12 @@ pub struct Candidate {
     /// Matched seconds over the probe duration, and over the reference's stored duration.
     pub query_coverage: f64,
     pub reference_coverage: f64,
+    /// Seconds inside dense support runs of the lines' hits, on each clock (passages' rule).
+    pub query_supported_seconds: f64,
+    pub reference_supported_seconds: f64,
+    /// Supported seconds over the probe duration, and over the reference's stored duration.
+    pub query_supported_coverage: f64,
+    pub reference_supported_coverage: f64,
     /// From the highest-scoring line: reference time minus probe time at its start, in seconds.
     pub offset_seconds: f64,
     pub time_factor: f64,
@@ -84,7 +98,7 @@ pub fn candidates(
     let rows: Vec<Result<Vec<MatchRow>>> = regions
         .par_iter()
         .filter(|prints| prints.len() >= 2)
-        .map(|prints| matcher.match_prints_multiline_with(prints, all, false, &table))
+        .map(|prints| matcher.match_prints_multiline_with(prints, all, true, &table))
         .collect();
 
     let mut by_key = BTreeMap::<String, Vec<MatchRow>>::new();
@@ -105,12 +119,22 @@ pub fn candidates(
             union_seconds(lines.iter().map(|line| (line.q_start, line.q_stop)));
         let reference_matched_seconds =
             union_seconds(lines.iter().map(|line| (line.ref_start, line.ref_stop)));
+        let support: Vec<SupportSpan> = lines
+            .iter()
+            .flat_map(|line| {
+                let hits = line.evidence.as_ref().map_or(&[][..], |e| &e.hits[..]);
+                support_from_hits(hits)
+            })
+            .collect();
+        let query_supported_seconds =
+            union_seconds(support.iter().map(|span| (span.a_start, span.a_stop)));
+        let reference_supported_seconds =
+            union_seconds(support.iter().map(|span| (span.b_start, span.b_stop)));
         let query_coverage = (query_matched_seconds / query_duration).min(1.0);
-        let reference_coverage = if reference_duration > 0.0 {
-            (reference_matched_seconds / reference_duration).min(1.0)
-        } else {
-            0.0
-        };
+        let reference_coverage = fraction(reference_matched_seconds, reference_duration);
+        let query_supported_coverage = (query_supported_seconds / query_duration).min(1.0);
+        let reference_supported_coverage =
+            fraction(reference_supported_seconds, reference_duration);
         let best = lines
             .iter()
             .max_by(|a, b| {
@@ -120,8 +144,8 @@ pub fn candidates(
             })
             .expect("a reference has at least one line");
         let relation = match (
-            query_coverage >= COVERED_FRACTION,
-            reference_coverage >= COVERED_FRACTION,
+            query_supported_coverage >= COVERED_FRACTION,
+            reference_supported_coverage >= COVERED_FRACTION,
         ) {
             (true, true) => Relation::Full,
             (true, false) => Relation::QueryWithinReference,
@@ -138,6 +162,10 @@ pub fn candidates(
             reference_matched_seconds,
             query_coverage,
             reference_coverage,
+            query_supported_seconds,
+            reference_supported_seconds,
+            query_supported_coverage,
+            reference_supported_coverage,
             relation,
         });
     }
@@ -175,6 +203,14 @@ pub fn probe_window(
         return Err(Error::BadRequest("window contains no fingerprints".into()));
     }
     Ok((inside, Some(stop - start)))
+}
+
+fn fraction(seconds: f64, duration: f64) -> f64 {
+    if duration > 0.0 {
+        (seconds / duration).min(1.0)
+    } else {
+        0.0
+    }
 }
 
 /// Total length of the union of `[start, stop]` intervals.
