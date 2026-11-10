@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -201,29 +199,24 @@ pub fn discover_passages_between(
 ) -> Result<PassageDiscovery> {
     // Discovery is exhaustive. A ranking limit cannot define absence in a persistent evidence
     // graph, so the existing crosscheck limit is set to the complete target population here.
+    // The self key and exclusions are never voted (SELF-SKIP): a whole-resource self diagonal is
+    // the costliest line in the fan-out, and skipping it leaves every other answer unchanged.
+    let mut skip_keys = vec![a_key];
+    skip_keys.extend(exclude_keys.unwrap_or_default().iter().map(String::as_str));
     let raw = crosscheck_between_multiline_geometry(
         a_store,
         b_store,
         a_key,
         a_window,
         targets,
+        &skip_keys,
         true,
         PASSAGE_GEOMETRY,
     )?;
     let a_content_hash = a_store.fingerprint_content_hash(a_key)?;
     let snapshot = snapshot(a_store, b_store, a_key)?;
-    let excluded: HashSet<&str> = exclude_keys
-        .unwrap_or_default()
-        .iter()
-        .map(String::as_str)
-        .collect();
     let mut matches = Vec::new();
     for found in raw {
-        // A resource is not evidence of its own recurrence. Exact-key exclusion is owned here so
-        // every consumer gets the same discovery semantics.
-        if found.ref_key == a_key || excluded.contains(found.ref_key.as_str()) {
-            continue;
-        }
         let b_content_hash = b_store.fingerprint_content_hash(&found.ref_key)?;
         let candidates = passages_from_segments(
             a_key,

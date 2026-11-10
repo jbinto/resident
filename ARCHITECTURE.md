@@ -82,6 +82,10 @@ again until it cannot pass or the applicable limit has survived. All surviving r
 ranked by score, so one reference may appear at multiple offsets. The default `match`, `span`,
 and `crosscheck` paths do not enter this loop.
 
+A matcher may skip named resources (crosscheck `skip_self`, discover's self key and exclusions).
+Their hits are dropped before voting, after the global-presence test, so the matching-hash
+population, and with it every other resource's hit order and answer, is unchanged.
+
 Compatibility-specific behavior—duplicate probe hashes, Java float arithmetic, and Java
 `HashMap` tie iteration—is contained in this module. Store ordering and public result ordering
 remain deterministic and independent of those quirks.

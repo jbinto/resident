@@ -139,10 +139,17 @@ pub fn crosscheck(
     targets: Option<&[String]>,
     k: usize,
     evidence: bool,
+    skip_self: bool,
 ) -> Result<Vec<CrosscheckMatch>> {
-    crosscheck_between(store, store, a_key, a_window, targets, k, evidence)
+    crosscheck_between(
+        store, store, a_key, a_window, targets, k, evidence, skip_self,
+    )
 }
 
+/// `skip_self` never votes B's resource named `a_key` (if B has one), so a self-check spends no
+/// time on its own diagonal and `k` counts only other references. Every other reference's
+/// segments are identical to the unskipped answer.
+#[allow(clippy::too_many_arguments)]
 pub fn crosscheck_between(
     a_store: &Store,
     b_store: &Store,
@@ -151,6 +158,7 @@ pub fn crosscheck_between(
     targets: Option<&[String]>,
     k: usize,
     evidence: bool,
+    skip_self: bool,
 ) -> Result<Vec<CrosscheckMatch>> {
     if k == 0 {
         return Err(Error::BadRequest("k must be greater than zero".into()));
@@ -166,7 +174,8 @@ pub fn crosscheck_between(
         None
     };
     let regions = region_prints(a_store, a_key, a_window, COMPATIBILITY_GEOMETRY)?;
-    let matcher = Matcher::new(b_store);
+    let skip: &[&str] = if skip_self { &[a_key] } else { &[] };
+    let matcher = Matcher::skipping(b_store, skip);
     let rows: Vec<_> = regions
         .par_iter()
         .map(|prints| matcher.match_prints(prints, b_store.resources().len().max(1), evidence))
@@ -214,10 +223,15 @@ pub fn crosscheck_multiline(
     targets: Option<&[String]>,
     k: usize,
     evidence: bool,
+    skip_self: bool,
 ) -> Result<Vec<CrosscheckMatch>> {
-    crosscheck_between_multiline(store, store, a_key, a_window, targets, k, evidence)
+    crosscheck_between_multiline(
+        store, store, a_key, a_window, targets, k, evidence, skip_self,
+    )
 }
 
+/// `skip_self` as in `crosscheck_between`.
+#[allow(clippy::too_many_arguments)]
 pub fn crosscheck_between_multiline(
     a_store: &Store,
     b_store: &Store,
@@ -226,16 +240,19 @@ pub fn crosscheck_between_multiline(
     targets: Option<&[String]>,
     k: usize,
     evidence: bool,
+    skip_self: bool,
 ) -> Result<Vec<CrosscheckMatch>> {
     if k == 0 {
         return Err(Error::BadRequest("k must be greater than zero".into()));
     }
+    let skip: &[&str] = if skip_self { &[a_key] } else { &[] };
     crosscheck_between_multiline_geometry(
         a_store,
         b_store,
         a_key,
         a_window,
         targets,
+        skip,
         evidence,
         COMPATIBILITY_GEOMETRY,
     )
@@ -245,12 +262,15 @@ pub fn crosscheck_between_multiline(
     })
 }
 
+/// `skip_keys` are B resources never voted (absent keys are ignored); see `Matcher::skipping`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn crosscheck_between_multiline_geometry(
     a_store: &Store,
     b_store: &Store,
     a_key: &str,
     a_window: Option<(f64, f64)>,
     targets: Option<&[String]>,
+    skip_keys: &[&str],
     evidence: bool,
     geometry: RegionGeometry,
 ) -> Result<Vec<CrosscheckMatch>> {
@@ -265,7 +285,7 @@ pub(crate) fn crosscheck_between_multiline_geometry(
         None
     };
     let regions = region_prints(a_store, a_key, a_window, geometry)?;
-    let matcher = Matcher::new(b_store);
+    let matcher = Matcher::skipping(b_store, skip_keys);
     // Regions overlap (12 s every 8 s), and per-hash lookups over 64 shards dominate discover:
     // look every distinct hash up once, in one sorted walk per shard.
     let all_hashes: Vec<u64> = regions.iter().flatten().map(|print| print.hash).collect();
