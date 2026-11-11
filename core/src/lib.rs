@@ -33,6 +33,6 @@ pub use span::{
     crosscheck_multiline, span, span_between, span_between_multiline, span_multiline,
 };
 pub use store::{
-    DurationPublishStats, DurationUpdate, IdentityRehashStats, IngestStats, LookupTable,
-    ResourceInfo, RetireStats, Store, StoreStats,
+    AppendStats, CompactStats, DurationPublishStats, DurationUpdate, IdentityRehashStats,
+    IngestStats, LookupTable, ResourceInfo, RetireStats, Store, StoreStats, TombstoneStats,
 };

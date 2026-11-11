@@ -205,6 +205,26 @@ build: the same resource ids (key order), shard bytes, manifest and generation. 
 answer is the union store's. Inputs are only read. Output:
 `{"store": {...stats...}, "inputs": [{...stats...}, ...]}`.
 
+### operator-only appends, tombstones and compaction (SEGMENTS)
+
+```
+resident append --store S --dump-dir D [--replace] [--no-merge]
+resident tombstone --store S --key K [--key K2 ...]
+resident compact --store S [--all]
+```
+
+`append` adds the dump's resources as one new segment without rewriting any existing shard, then
+runs due merges (`--no-merge` defers them). Changed keys need `--replace`; their old postings are
+tombstoned. Output: `{"generation", "segments", "resources_added", "resources_replaced",
+"resources_unchanged", "postings_added", "postings_written", "merges"}`. `tombstone` retires keys
+without rewriting anything: `{"generation", "segments", "postings_retired", "postings_written",
+"merges"}`. `compact` runs due merges, or with `--all` merges every segment into one plain store:
+`{"generation", "segments_before", "segments", "merges", "postings_written", "postings_dropped"}`.
+Every query answer on a segmented store equals the answer on the compacted store, which equals the
+store in-place `ingest`/`retire` would have produced. On a segmented store, the in-place `ingest`
+and `retire` verbs (CLI and daemon) return `bad_request`; use these, or `compact --all` first. A
+second concurrent writer of any kind gets `bad_request` ("another writer holds …/LOCK").
+
 ### retire
 `{"key": "..."}` → `{"generation": "...", "postings_removed": N}`
 Unknown key: error `bad_request` (never a silent no-op).

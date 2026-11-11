@@ -712,6 +712,7 @@ mod tests {
             content_hash: "hash".to_owned(),
             shard: 0,
             forward_start: 0,
+            segment: 0,
         }
     }
 

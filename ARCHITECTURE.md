@@ -28,8 +28,8 @@ engine identity.
 
 ## Store
 
-A store root contains `CURRENT`, immutable JSON generation manifests in `generations/`, and
-immutable binary files in `shards/`. `CURRENT` is replaced atomically only after every shard
+A store root contains `CURRENT`, immutable JSON generation manifests in `generations/`,
+immutable binary files in `shards/`, and the writers' `LOCK`. `CURRENT` is replaced atomically only after every shard
 and the new manifest have been synced. Readers retain their mappings when a later generation
 is published.
 
@@ -66,6 +66,43 @@ ingest of a dump directory (`build_from_dump_dir`) uses the print files, decoded
 shard. A resource always
 lives in its key-selected shard, so output shard N is written from the inputs' shard N alone. Peak
 memory is about one shard of postings, and the result is byte-identical to a build of the union.
+
+### Segments (appends and tombstones)
+
+A store may be a list of segments (manifest version 2). A segment is one immutable set of 64
+key-sharded shard files in the layout above, plus tombstones: `(resource id, shard, postings)`
+entries whose postings in that segment no longer count. A version-1 manifest is the one-segment,
+no-tombstone case and is what every whole-store build still writes.
+`core/src/store/segments.rs` holds the writers:
+
+- `append` writes only the incoming resources, as a new segment. New keys take the next ids; a
+  replaced key keeps its id, its old copy is tombstoned and the new one goes in the new segment. No
+  existing shard is rewritten, so a nightly batch costs its own postings, not the touched shards.
+- `tombstone` retires keys by adding tombstones; nothing is rewritten.
+- `compact` merges segments shard by shard (peak memory about one shard of theirs), keeping ids and
+  dropping tombstoned postings; shard files whose content already exists are reused, not rewritten.
+  Due merges run after an append or tombstone unless deferred: a segment at least half dead is
+  rewritten alone, and four segments in one size tier (tiers are ×4 apart from 2^20 live postings)
+  merge into one. `compact --all` merges everything into a version-1 store.
+
+The invariant: a segmented store answers exactly as the store a full compaction would write, and
+that store is the one in-place `ingest`/`retire` would have written (same ids, shard bytes, manifest
+and generation). Reads keep it by restoring one-store order: a shard's hits for a hash range are
+gathered from every segment, tombstoned resources dropped, and sorted back into
+`(hash, resource, time, frequency)`, the order one shard holds, so the voter sees the same hit
+sequence and `has_match` sees the same global population. A segment with no tombstones in a shard
+pays nothing for them; one segment without tombstones takes the old path unchanged.
+
+Every writer (ingest, retire, append, tombstone, compact, set-durations, rehash-identities) holds an
+exclusive OS lock on `<root>/LOCK`, so a second writer is refused rather than racing for ids; the
+lock dies with its process. Publication order is: shard files written to a temp name, synced and
+renamed; `shards/` synced; manifest written to a temp name, synced, renamed, `generations/` synced;
+`CURRENT` swapped and the root synced; then unreferenced files collected (the previous generation
+is kept). A writer stopped between any two steps leaves the last published generation intact, and
+the next writer overwrites the dead one's temp files. A reader that opens while a writer publishes
+twice can find files collected under it; `Store::open` then sees `CURRENT` moved and retries. An
+open store maps its files, so a daemon request pinned to a generation finishes on it even after
+the files are unlinked.
 
 Legacy manifests may contain duration-coupled endpoint hashes. `rehash-identities` scans each
 resource's forward postings, publishes a manifest marked `prints-v1`, and reuses every shard byte.
