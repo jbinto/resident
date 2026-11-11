@@ -129,9 +129,11 @@ fn a_flood_of_heavy_requests_gets_every_answer_and_the_same_answers() {
         .expect("one request at a time fits some small stack");
 
     // One request in flight: nothing else is queued in Rayon for a blocked worker to steal, so the
-    // flood needs exactly the stack one request needs. (The default N workers bound the nesting
-    // at N requests deep; per-line Rayon tasks nested the whole backlog.)
-    let flood = requests(&keys, 10);
+    // flood needs about the stack one request needs. Twice that leaves room for how Rayon happens
+    // to split one request on a loaded machine; per-line Rayon tasks nested dozens of whole
+    // requests and still overflow it. (The default N workers bound the nesting at N requests.)
+    let stack = 2 * stack;
+    let flood = requests(&keys, 20);
     let (flooded, stderr, ok) = run(store.path(), &flood, true, stack, 1);
     assert!(
         ok && flooded.len() == flood.len(),
