@@ -162,6 +162,35 @@ enum Command {
         #[arg(long)]
         evidence: bool,
     },
+    /// Add a dump directory's resources as one new segment (no existing shard is rewritten),
+    /// then run due tiered merges. Changed keys need --replace; their old postings are
+    /// tombstoned.
+    Append {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        dump_dir: PathBuf,
+        #[arg(long)]
+        replace: bool,
+        /// Leave due merges for a later `compact`.
+        #[arg(long)]
+        no_merge: bool,
+    },
+    /// Retire resources by tombstone: nothing is rewritten until a merge reclaims the space.
+    Tombstone {
+        #[arg(long)]
+        store: PathBuf,
+        /// A key to retire. Repeat for each.
+        #[arg(long = "key", required = true)]
+        keys: Vec<String>,
+    },
+    /// Run due tiered merges; with --all, merge every segment into one plain store.
+    Compact {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        all: bool,
+    },
     /// Retire a resource by publishing a new generation without its postings.
     Retire {
         #[arg(long)]
@@ -465,6 +494,28 @@ fn main() -> anyhow::Result<()> {
                 evidence,
             )?;
             println!("{}", serde_json::to_string_pretty(&answer)?);
+        }
+        Command::Append {
+            store,
+            dump_dir,
+            replace,
+            no_merge,
+        } => {
+            let resources = load_dump_dir(&dump_dir)
+                .with_context(|| format!("load dump {}", dump_dir.display()))?;
+            let (_, stats) = Store::append(&store, resources, replace, !no_merge)
+                .with_context(|| format!("append to store {}", store.display()))?;
+            println!("{}", serde_json::to_string_pretty(&stats)?);
+        }
+        Command::Tombstone { store, keys } => {
+            let (_, stats) = Store::tombstone(&store, &keys)
+                .with_context(|| format!("tombstone in store {}", store.display()))?;
+            println!("{}", serde_json::to_string_pretty(&stats)?);
+        }
+        Command::Compact { store, all } => {
+            let (_, stats) = Store::compact(&store, all)
+                .with_context(|| format!("compact store {}", store.display()))?;
+            println!("{}", serde_json::to_string_pretty(&stats)?);
         }
         Command::Retire { store, key } => {
             let (_, stats) = Store::retire(&store, &key)?;

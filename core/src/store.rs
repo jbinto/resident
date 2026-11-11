@@ -10,7 +10,13 @@ use crate::config::{MAX_HASH, config_id};
 use crate::mmap_view::MappedFile;
 use crate::{DumpResource, Error, Fingerprint, Result};
 
+mod segments;
+pub use segments::{AppendStats, CompactStats, TombstoneStats};
+
 const STORE_VERSION: u32 = 1;
+/// Manifest version of a segmented store (SEGMENTS): more than one segment, or tombstones. The
+/// shard files keep `STORE_VERSION`; a store with one segment and no tombstones stays version 1.
+const SEGMENTED_MANIFEST_VERSION: u32 = 2;
 const SHARD_COUNT: u32 = 64;
 const MAGIC: &[u8; 8] = b"RESIDNT1";
 const HEADER_SIZE: u64 = 128;
@@ -33,6 +39,13 @@ pub struct ResourceInfo {
     pub content_hash: String,
     pub shard: u32,
     pub forward_start: u64,
+    /// The segment holding this resource's postings (SEGMENTS); 0 in an unsegmented store.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub segment: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,7 +65,70 @@ struct Manifest {
     fingerprint_identity_profile: Option<String>,
     shard_count: u32,
     resources: Vec<ResourceInfo>,
+    /// Version 1: the store's one segment. Version 2: empty; `segments` holds them all.
+    #[serde(default)]
     shards: Vec<ShardInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    segments: Vec<SegmentInfo>,
+}
+
+/// One immutable set of 64 shard files plus the postings in it that no longer count.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SegmentInfo {
+    shards: Vec<ShardInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dead: Vec<DeadResource>,
+}
+
+/// A tombstone: resource `id`'s postings in this segment's shard `shard` are retired (or replaced
+/// by a copy in a later segment). They stay on disk until a merge rewrites the segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct DeadResource {
+    id: u32,
+    shard: u32,
+    /// How many postings stop counting (merge policy and stats only).
+    #[serde(default)]
+    postings: u64,
+}
+
+impl Manifest {
+    /// Every segment, oldest first; a version-1 manifest is one segment without tombstones.
+    fn segment_list(&self) -> Vec<SegmentInfo> {
+        if self.version == SEGMENTED_MANIFEST_VERSION {
+            self.segments.clone()
+        } else {
+            vec![SegmentInfo {
+                shards: self.shards.clone(),
+                dead: Vec::new(),
+            }]
+        }
+    }
+
+    /// Store `segments` in the plainest form that holds them, and recompute the generation.
+    fn set_segments(&mut self, segments: Vec<SegmentInfo>) {
+        if segments.len() == 1 && segments[0].dead.is_empty() {
+            self.version = STORE_VERSION;
+            self.shards = segments.into_iter().next().expect("one segment").shards;
+            self.segments = Vec::new();
+            for resource in &mut self.resources {
+                resource.segment = 0;
+            }
+        } else {
+            self.version = SEGMENTED_MANIFEST_VERSION;
+            self.shards = Vec::new();
+            self.segments = segments;
+        }
+        self.resources
+            .sort_by_key(|resource| (resource.id, resource.segment));
+        self.generation = generation_of(self);
+    }
+
+    fn shard_files(&self) -> Vec<String> {
+        self.segment_list()
+            .into_iter()
+            .flat_map(|segment| segment.shards.into_iter().map(|shard| shard.file))
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -140,7 +216,37 @@ pub struct Store {
     manifest: Manifest,
     resources_by_key: HashMap<String, usize>,
     resources_by_id: HashMap<u32, usize>,
+    segments: Vec<Segment>,
+}
+
+struct Segment {
     shards: Vec<Shard>,
+    /// Per shard number: the sorted resource ids whose postings here are tombstoned.
+    dead: Vec<Vec<u32>>,
+}
+
+impl Segment {
+    /// Drop `hits[from..]` whose resource is tombstoned in this segment's shard `number`. Free
+    /// when the shard has no tombstones.
+    fn retain_live(&self, number: usize, hits: &mut Vec<StoredHit>, from: usize) {
+        let dead = &self.dead[number];
+        if dead.is_empty() || hits.len() == from {
+            return;
+        }
+        let mut write = from;
+        for read in from..hits.len() {
+            if dead.binary_search(&hits[read].resource_id).is_err() {
+                hits[write] = hits[read];
+                write += 1;
+            }
+        }
+        hits.truncate(write);
+    }
+}
+
+/// The order of one shard's hits for a hash range: every lookup across segments restores it.
+fn hit_order(hit: &StoredHit) -> (u64, u32, u32, u16) {
+    (hit.matched_hash, hit.resource_id, hit.t, hit.f)
 }
 
 /// A resource whose prints a build reads only when its shard is written; `origin` is the
@@ -149,6 +255,14 @@ struct PlannedResource {
     key: String,
     duration: f64,
     origin: usize,
+}
+
+struct IngestPlan {
+    changes: HashMap<String, (u32, DumpResource)>,
+    resources_added: usize,
+    resources_replaced: usize,
+    resources_unchanged: usize,
+    postings_added: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -169,6 +283,7 @@ struct ImmutableResourceFacts {
     content_hash: String,
     shard: u32,
     forward_start: u64,
+    segment: u32,
 }
 
 impl Store {
@@ -339,6 +454,7 @@ impl Store {
             shard_count: SHARD_COUNT,
             resources: resource_infos,
             shards: shard_infos,
+            segments: Vec::new(),
         };
         publish_manifest(root, &manifest)?;
         Self::open(root)
@@ -352,6 +468,8 @@ impl Store {
         if resources.is_empty() {
             return Err(Error::BadRequest("ingest has no resources".into()));
         }
+        fs::create_dir_all(root).map_err(|source| Error::io(root, source))?;
+        let _lock = segments::writer_lock(root)?;
         let current = match Self::open(root) {
             Ok(store) => store,
             Err(Error::StoreMissing(_)) => {
@@ -373,6 +491,61 @@ impl Store {
             Err(error) => return Err(error),
         };
 
+        if current.is_segmented() {
+            return Err(Error::BadRequest(
+                "the store is segmented: use append, or compact --all first".into(),
+            ));
+        }
+        let IngestPlan {
+            changes,
+            resources_added,
+            resources_replaced,
+            resources_unchanged,
+            postings_added,
+        } = current.plan_ingest(resources, replace)?;
+        if changes.is_empty() {
+            let generation = current.manifest.generation.clone();
+            return Ok((
+                current,
+                IngestStats {
+                    generation,
+                    resources_added: 0,
+                    resources_replaced: 0,
+                    resources_unchanged,
+                    postings_added: 0,
+                },
+            ));
+        }
+
+        let mut affected = std::collections::BTreeSet::new();
+        for (key, (_, resource)) in &changes {
+            affected.insert(shard_for_key(&resource.meta.key));
+            if let Some(existing) = current
+                .resources_by_key
+                .get(key)
+                .map(|index| &current.manifest.resources[*index])
+            {
+                affected.insert(existing.shard);
+            }
+        }
+        let manifest = current.rebuild_changed_shards(&affected, &changes, None)?;
+        publish_manifest(root, &manifest)?;
+        let store = Self::open(root)?;
+        Ok((
+            store,
+            IngestStats {
+                generation: manifest.generation,
+                resources_added,
+                resources_replaced,
+                resources_unchanged,
+                postings_added,
+            },
+        ))
+    }
+
+    /// Sort incoming resources into added (next ids), replaced (keeping their ids) and unchanged.
+    fn plan_ingest(&self, resources: Vec<DumpResource>, replace: bool) -> Result<IngestPlan> {
+        let current = self;
         let mut incoming = resources;
         incoming.sort_by(|a, b| a.meta.key.cmp(&b.meta.key));
         for pair in incoming.windows(2) {
@@ -438,48 +611,27 @@ impl Store {
                 changes.insert(resource.meta.key.clone(), (id, resource));
             }
         }
-        if changes.is_empty() {
-            let generation = current.manifest.generation.clone();
-            return Ok((
-                current,
-                IngestStats {
-                    generation,
-                    resources_added: 0,
-                    resources_replaced: 0,
-                    resources_unchanged,
-                    postings_added: 0,
-                },
-            ));
-        }
+        Ok(IngestPlan {
+            changes,
+            resources_added,
+            resources_replaced,
+            resources_unchanged,
+            postings_added,
+        })
+    }
 
-        let mut affected = std::collections::BTreeSet::new();
-        for (key, (_, resource)) in &changes {
-            affected.insert(shard_for_key(&resource.meta.key));
-            if let Some(existing) = current
-                .resources_by_key
-                .get(key)
-                .map(|index| &current.manifest.resources[*index])
-            {
-                affected.insert(existing.shard);
-            }
-        }
-        let manifest = current.rebuild_changed_shards(&affected, &changes, None)?;
-        publish_manifest(root, &manifest)?;
-        let store = Self::open(root)?;
-        Ok((
-            store,
-            IngestStats {
-                generation: manifest.generation,
-                resources_added,
-                resources_replaced,
-                resources_unchanged,
-                postings_added,
-            },
-        ))
+    fn is_segmented(&self) -> bool {
+        self.manifest.version == SEGMENTED_MANIFEST_VERSION
     }
 
     pub fn retire(root: &Path, key: &str) -> Result<(Self, RetireStats)> {
+        let _lock = segments::writer_lock(root)?;
         let current = Self::open(root)?;
+        if current.is_segmented() {
+            return Err(Error::BadRequest(
+                "the store is segmented: use tombstone, or compact --all first".into(),
+            ));
+        }
         let retired = current.resource(key)?.clone();
         if current.manifest.resources.len() == 1 {
             return Err(Error::BadRequest(
@@ -502,6 +654,7 @@ impl Store {
     /// Publish a manifest whose endpoint identities cover only canonical `(hash,t,f)` postings.
     /// Shard bytes are reused; this operation neither extracts nor rewrites fingerprints.
     pub fn rehash_identities(root: &Path) -> Result<(Self, IdentityRehashStats)> {
+        let _lock = segments::writer_lock(root)?;
         let current = Self::open(root)?;
         let previous_generation = current.manifest.generation.clone();
         let mut manifest = current.manifest.clone();
@@ -516,10 +669,7 @@ impl Store {
         let profile_changed =
             manifest.fingerprint_identity_profile.as_deref() != Some(FINGERPRINT_IDENTITY_PROFILE);
         manifest.fingerprint_identity_profile = Some(FINGERPRINT_IDENTITY_PROFILE.to_owned());
-        manifest.generation = generation_id_from_infos(
-            &manifest.resources,
-            manifest.fingerprint_identity_profile.as_deref(),
-        );
+        manifest.generation = generation_of(&manifest);
         let published = resources_changed != 0 || profile_changed;
         if published {
             publish_manifest(root, &manifest)?;
@@ -550,6 +700,7 @@ impl Store {
         expected_generation: &str,
         updates: Vec<DurationUpdate>,
     ) -> Result<(Self, DurationPublishStats)> {
+        let _lock = segments::writer_lock(root)?;
         let current = Self::open(root)?;
         let previous_generation = current.manifest.generation.clone();
         if previous_generation != expected_generation {
@@ -610,12 +761,7 @@ impl Store {
         }
 
         let identity_before = immutable_resource_facts(&current.manifest.resources);
-        let shards_before: Vec<_> = current
-            .manifest
-            .shards
-            .iter()
-            .map(|shard| shard.file.clone())
-            .collect();
+        let shards_before = current.manifest.shard_files();
         let mut manifest = current.manifest.clone();
         let mut resources_changed = 0;
         for resource in &mut manifest.resources {
@@ -639,21 +785,13 @@ impl Store {
             ));
         }
 
-        manifest.generation = generation_id_from_infos(
-            &manifest.resources,
-            manifest.fingerprint_identity_profile.as_deref(),
-        );
+        manifest.generation = generation_of(&manifest);
         publish_manifest(root, &manifest)?;
         drop(current);
         let store = Self::open(root)?;
         let content_hashes_unchanged =
             immutable_resource_facts(&store.manifest.resources) == identity_before;
-        let shards_reused = store
-            .manifest
-            .shards
-            .iter()
-            .map(|shard| shard.file.as_str())
-            .eq(shards_before.iter().map(String::as_str));
+        let shards_reused = store.manifest.shard_files() == shards_before;
         if !content_hashes_unchanged || !shards_reused {
             return Err(Error::Internal(
                 "duration publication changed fingerprint identity or shard references".into(),
@@ -672,7 +810,25 @@ impl Store {
         ))
     }
 
+    /// Open the published generation. A writer publishing twice while this reads (CURRENT, then
+    /// the manifest, then its shards) can collect files this generation named; then CURRENT has
+    /// moved, and the open retries on the new generation.
     pub fn open(root: &Path) -> Result<Self> {
+        let mut attempts = 0;
+        loop {
+            let before = fs::read_to_string(root.join("CURRENT")).ok();
+            match Self::open_once(root) {
+                Err(Error::Io { .. } | Error::InvalidStore(_))
+                    if attempts < 3 && fs::read_to_string(root.join("CURRENT")).ok() != before =>
+                {
+                    attempts += 1;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn open_once(root: &Path) -> Result<Self> {
         let current_path = root.join("CURRENT");
         let current = fs::read_to_string(&current_path).map_err(|source| {
             if source.kind() == std::io::ErrorKind::NotFound {
@@ -689,9 +845,9 @@ impl Store {
         let bytes = fs::read(&manifest_path).map_err(|source| Error::io(&manifest_path, source))?;
         let manifest: Manifest = serde_json::from_slice(&bytes)
             .map_err(|error| Error::InvalidStore(format!("manifest JSON: {error}")))?;
-        if manifest.version != STORE_VERSION {
+        if manifest.version != STORE_VERSION && manifest.version != SEGMENTED_MANIFEST_VERSION {
             return Err(Error::StoreVersionMismatch {
-                expected: STORE_VERSION,
+                expected: SEGMENTED_MANIFEST_VERSION,
                 found: manifest.version,
             });
         }
@@ -709,21 +865,49 @@ impl Store {
                 "unknown fingerprint identity profile {profile:?}"
             )));
         }
-        if manifest.shard_count != SHARD_COUNT || manifest.shards.len() != SHARD_COUNT as usize {
+        let segment_infos = manifest.segment_list();
+        if manifest.shard_count != SHARD_COUNT || segment_infos.is_empty() {
             return Err(Error::InvalidStore(format!(
-                "expected {SHARD_COUNT} shards, manifest has {}",
-                manifest.shards.len()
+                "expected {SHARD_COUNT} shards in at least one segment"
             )));
         }
-
-        let mut shards = Vec::with_capacity(SHARD_COUNT as usize);
-        for (expected_number, info) in manifest.shards.iter().enumerate() {
-            if info.number != expected_number as u32 {
-                return Err(Error::InvalidStore(
-                    "shards are not in numeric order".into(),
-                ));
+        let mut segments = Vec::with_capacity(segment_infos.len());
+        for segment in &segment_infos {
+            if segment.shards.len() != SHARD_COUNT as usize {
+                return Err(Error::InvalidStore(format!(
+                    "expected {SHARD_COUNT} shards, manifest has {}",
+                    segment.shards.len()
+                )));
             }
-            shards.push(Shard::open(&root.join("shards").join(&info.file), info)?);
+            let mut shards = Vec::with_capacity(SHARD_COUNT as usize);
+            for (expected_number, info) in segment.shards.iter().enumerate() {
+                if info.number != expected_number as u32 {
+                    return Err(Error::InvalidStore(
+                        "shards are not in numeric order".into(),
+                    ));
+                }
+                shards.push(Shard::open(&root.join("shards").join(&info.file), info)?);
+            }
+            let mut dead = vec![Vec::new(); SHARD_COUNT as usize];
+            for tombstone in &segment.dead {
+                let ids = dead.get_mut(tombstone.shard as usize).ok_or_else(|| {
+                    Error::InvalidStore(format!("tombstone names shard {}", tombstone.shard))
+                })?;
+                ids.push(tombstone.id);
+            }
+            for ids in &mut dead {
+                ids.sort_unstable();
+                ids.dedup();
+            }
+            segments.push(Segment { shards, dead });
+        }
+        for resource in &manifest.resources {
+            if resource.segment as usize >= segments.len() {
+                return Err(Error::InvalidStore(format!(
+                    "resource {:?} names segment {}",
+                    resource.key, resource.segment
+                )));
+            }
         }
         let resources_by_key = manifest
             .resources
@@ -742,7 +926,7 @@ impl Store {
             manifest,
             resources_by_key,
             resources_by_id,
-            shards,
+            segments,
         })
     }
 
@@ -797,7 +981,7 @@ impl Store {
 
     pub fn forward(&self, key: &str, window: Option<(u32, u32)>) -> Result<Vec<Fingerprint>> {
         let resource = self.resource(key)?;
-        let shard = &self.shards[resource.shard as usize];
+        let shard = &self.segments[resource.segment as usize].shards[resource.shard as usize];
         shard.forward(resource, window)
     }
 
@@ -810,10 +994,31 @@ impl Store {
             .saturating_add(crate::config::QUERY_RANGE)
             .min(MAX_HASH);
         let mut hits = Vec::new();
-        for shard in &self.shards {
-            shard.lookup_range(start, stop, &mut hits)?;
+        for number in 0..SHARD_COUNT as usize {
+            self.lookup_shard_range(number, start, stop, &mut hits)?;
         }
         Ok(hits)
+    }
+
+    /// Append shard `number`'s live hits for `[start, stop]` in one-store order: across segments
+    /// they are merged back into (hash, resource id, t, f), the order one merged shard holds.
+    fn lookup_shard_range(
+        &self,
+        number: usize,
+        start: u64,
+        stop: u64,
+        out: &mut Vec<StoredHit>,
+    ) -> Result<()> {
+        let from = out.len();
+        for segment in &self.segments {
+            let segment_from = out.len();
+            segment.shards[number].lookup_range(start, stop, out)?;
+            segment.retain_live(number, out, segment_from);
+        }
+        if self.segments.len() > 1 {
+            out[from..].sort_by_key(hit_order);
+        }
+        Ok(())
     }
 
     /// Batched `lookup`: the same hits in the same order for every hash, gathered by walking
@@ -830,9 +1035,9 @@ impl Store {
         hashes.dedup();
         let per_shard: Vec<Result<(Vec<StoredHit>, Vec<usize>)>> = {
             use rayon::prelude::*;
-            self.shards
-                .par_iter()
-                .map(|shard| shard.lookup_sorted(&hashes))
+            (0..SHARD_COUNT as usize)
+                .into_par_iter()
+                .map(|number| self.lookup_sorted_shard(number, &hashes))
                 .collect()
         };
         let per_shard = per_shard.into_iter().collect::<Result<Vec<_>>>()?;
@@ -854,6 +1059,39 @@ impl Store {
         })
     }
 
+    /// `Shard::lookup_sorted` over every segment's shard `number`, live hits only, each hash's
+    /// hits in one-store order. One segment without tombstones is the shard's own answer.
+    fn lookup_sorted_shard(
+        &self,
+        number: usize,
+        hashes: &[u64],
+    ) -> Result<(Vec<StoredHit>, Vec<usize>)> {
+        if self.segments.len() == 1 && self.segments[0].dead[number].is_empty() {
+            return self.segments[0].shards[number].lookup_sorted(hashes);
+        }
+        let parts = self
+            .segments
+            .iter()
+            .map(|segment| segment.shards[number].lookup_sorted(hashes))
+            .collect::<Result<Vec<_>>>()?;
+        let mut hits = Vec::new();
+        let mut offsets = Vec::with_capacity(hashes.len() + 1);
+        for index in 0..hashes.len() {
+            offsets.push(hits.len());
+            let from = hits.len();
+            for (segment, (part_hits, part_offsets)) in self.segments.iter().zip(&parts) {
+                let segment_from = hits.len();
+                hits.extend_from_slice(&part_hits[part_offsets[index]..part_offsets[index + 1]]);
+                segment.retain_live(number, &mut hits, segment_from);
+            }
+            if self.segments.len() > 1 {
+                hits[from..].sort_by_key(hit_order);
+            }
+        }
+        offsets.push(hits.len());
+        Ok((hits, offsets))
+    }
+
     /// Whether the compatibility lookup range occurs anywhere in the store. Pair matching needs
     /// this global shape to reproduce Panako's hash-map iteration capacity, even though only the
     /// named target's postings may enter its voter.
@@ -865,9 +1103,22 @@ impl Store {
         let stop = hash
             .saturating_add(crate::config::QUERY_RANGE)
             .min(MAX_HASH);
-        for shard in &self.shards {
-            if shard.has_range(start, stop)? {
-                return Ok(true);
+        let mut scratch = Vec::new();
+        for segment in &self.segments {
+            for (number, shard) in segment.shards.iter().enumerate() {
+                if segment.dead[number].is_empty() {
+                    if shard.has_range(start, stop)? {
+                        return Ok(true);
+                    }
+                } else {
+                    // Tombstoned postings must not count toward the global population.
+                    scratch.clear();
+                    shard.lookup_range(start, stop, &mut scratch)?;
+                    segment.retain_live(number, &mut scratch, 0);
+                    if !scratch.is_empty() {
+                        return Ok(true);
+                    }
+                }
             }
         }
         Ok(false)
@@ -885,7 +1136,8 @@ impl Store {
             .saturating_add(crate::config::QUERY_RANGE)
             .min(MAX_HASH);
         let mut hits = Vec::new();
-        self.shards[resource.shard as usize].lookup_range(start, stop, &mut hits)?;
+        self.segments[resource.segment as usize].shards[resource.shard as usize]
+            .lookup_range(start, stop, &mut hits)?;
         hits.retain(|hit| hit.resource_id == resource_id);
         Ok(hits)
     }
@@ -1193,6 +1445,7 @@ fn write_shard(
             content_hash,
             shard: number,
             forward_start,
+            segment: 0,
         });
     }
     postings.sort_by_key(|posting| (posting.resource_id, posting.t, posting.hash, posting.f));
@@ -1227,9 +1480,12 @@ fn write_shard_file(
     inverted: &[FullPosting],
     hash_count: u64,
 ) -> Result<()> {
+    // A writer killed mid-file leaves its temp behind; the next writer (holding the lock) starts it
+    // over rather than failing on it forever.
     let temp = path.with_extension("bin.tmp");
     let file = OpenOptions::new()
-        .create_new(true)
+        .create(true)
+        .truncate(true)
         .write(true)
         .open(&temp)
         .map_err(|source| Error::io(&temp, source))?;
@@ -1280,8 +1536,27 @@ fn write_shard_file(
         .into_inner()
         .map_err(|error| Error::io(&temp, error.into_error()))?;
     file.sync_all().map_err(|source| Error::io(&temp, source))?;
+    crash_point("shard-temp");
     fs::rename(&temp, path).map_err(|source| Error::io(path, source))?;
+    crash_point("shard");
     Ok(())
+}
+
+/// Crash tests only: with `RESIDENT_TEST_CRASH_AT=<step>:<n>` the process aborts at the n-th pass
+/// of that publish step, so a test can stop a writer between any two durable steps. Unset, it
+/// costs one environment lookup per file written.
+fn crash_point(step: &str) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static PASSES: AtomicUsize = AtomicUsize::new(0);
+    let Ok(spec) = std::env::var("RESIDENT_TEST_CRASH_AT") else {
+        return;
+    };
+    let Some((name, pass)) = spec.split_once(':') else {
+        return;
+    };
+    if name == step && Some(PASSES.fetch_add(1, Ordering::SeqCst) + 1) == pass.parse().ok() {
+        std::process::abort();
+    }
 }
 
 fn publish_manifest(root: &Path, manifest: &Manifest) -> Result<()> {
@@ -1289,6 +1564,9 @@ fn publish_manifest(root: &Path, manifest: &Manifest) -> Result<()> {
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    // Every shard file the manifest names was synced and renamed into shards/; make those renames
+    // durable before any manifest can point at them.
+    sync_directory(&root.join("shards"))?;
     let name = format!("{}.json", manifest.generation);
     let path = root.join("generations").join(&name);
     let temp_manifest = root
@@ -1297,13 +1575,17 @@ fn publish_manifest(root: &Path, manifest: &Manifest) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(manifest)
         .map_err(|error| Error::Internal(format!("serialize manifest: {error}")))?;
     write_synced(&temp_manifest, &bytes)?;
+    crash_point("manifest-temp");
     fs::rename(&temp_manifest, &path).map_err(|source| Error::io(&path, source))?;
+    sync_directory(&root.join("generations"))?;
 
     let current_temp = root.join(format!("CURRENT.{}.tmp", manifest.generation));
     write_synced(&current_temp, format!("{name}\n").as_bytes())?;
+    crash_point("current-temp");
     fs::rename(&current_temp, root.join("CURRENT"))
         .map_err(|source| Error::io(root.join("CURRENT"), source))?;
     sync_directory(root)?;
+    crash_point("current");
     garbage_collect(root, &name, previous.as_deref());
     Ok(())
 }
@@ -1317,7 +1599,7 @@ fn garbage_collect(root: &Path, current: &str, previous: Option<&str>) {
         if let Ok(bytes) = fs::read(&path)
             && let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes)
         {
-            referenced_shards.extend(manifest.shards.into_iter().map(|shard| shard.file));
+            referenced_shards.extend(manifest.shard_files());
         }
     }
     if let Ok(entries) = fs::read_dir(root.join("generations")) {
@@ -1349,6 +1631,34 @@ fn sync_directory(path: &Path) -> Result<()> {
     directory
         .sync_all()
         .map_err(|source| Error::io(path, source))
+}
+
+/// A version-1 store's generation is its resources'; a segmented one's also names its segments
+/// and tombstones, so the same resources laid out differently are different generations.
+fn generation_of(manifest: &Manifest) -> String {
+    let base = generation_id_from_infos(
+        &manifest.resources,
+        manifest.fingerprint_identity_profile.as_deref(),
+    );
+    if manifest.version != SEGMENTED_MANIFEST_VERSION {
+        return base;
+    }
+    let mut digest = Sha256::new();
+    digest.update(base.as_bytes());
+    for resource in &manifest.resources {
+        digest.update(resource.segment.to_le_bytes());
+    }
+    for segment in &manifest.segments {
+        digest.update(b"segment");
+        for shard in &segment.shards {
+            digest.update(shard.file.as_bytes());
+        }
+        for dead in &segment.dead {
+            digest.update(dead.id.to_le_bytes());
+            digest.update(dead.shard.to_le_bytes());
+        }
+    }
+    hex::encode(digest.finalize())[..24].to_owned()
 }
 
 fn generation_id_from_infos(resources: &[ResourceInfo], identity_profile: Option<&str>) -> String {
@@ -1425,6 +1735,7 @@ fn immutable_resource_facts(resources: &[ResourceInfo]) -> Vec<ImmutableResource
             content_hash: resource.content_hash.clone(),
             shard: resource.shard,
             forward_start: resource.forward_start,
+            segment: resource.segment,
         })
         .collect()
 }
