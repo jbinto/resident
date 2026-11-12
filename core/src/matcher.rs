@@ -194,91 +194,90 @@ impl<'a> Matcher<'a> {
 
         // Panako queues every input hash but its hash-keyed probe map retains the last (t,f)
         // for duplicates. Preserve that compatibility quirk inside this module only.
-        let mut last_print = HashMap::new();
-        let mut multiplicity = HashMap::<u64, usize>::new();
-        let mut first_occurrence = HashMap::<u64, usize>::new();
+        let mut probe = HashMap::<u64, ProbeHash>::new();
         for (index, &print) in prints.iter().enumerate() {
-            last_print.insert(print.hash, print);
-            *multiplicity.entry(print.hash).or_default() += 1;
-            first_occurrence.entry(print.hash).or_insert(index);
+            let entry = probe.entry(print.hash).or_insert(ProbeHash {
+                last: print,
+                copies: 0,
+                first: index,
+            });
+            entry.last = print;
+            entry.copies += 1;
         }
-        let mut hashes: Vec<_> = multiplicity.keys().copied().collect();
+        let mut hashes: Vec<_> = probe.keys().copied().collect();
         hashes.sort_unstable();
 
-        let lookups: Vec<Result<(u64, Vec<StoredHit>, bool)>> = hashes
-            .par_iter()
-            .map(|&hash| {
-                let hits = only_resource.map_or_else(
-                    || match table.and_then(|table| table.get(hash)) {
-                        Some(hits) => Ok(hits.to_vec()),
-                        None => self.store.lookup(hash),
-                    },
-                    |resource_id| self.store.lookup_resource(hash, resource_id),
-                )?;
-                let global_present = if only_resource.is_some() {
-                    self.store.has_match(hash)?
-                } else {
-                    !hits.is_empty()
-                };
-                Ok((hash, hits, global_present))
-            })
-            .collect();
-        let mut lookups: Vec<_> = lookups.into_iter().collect::<Result<Vec<_>>>()?;
-        lookups.retain(|(_, _, global_present)| *global_present);
-        let capacity = java_hash_map_capacity(lookups.len());
-        lookups.sort_by_key(|(hash, _, _)| {
-            (java_long_bucket(*hash, capacity), first_occurrence[hash])
-        });
-        let mut by_resource = HashMap::<u32, Vec<Hit>>::new();
-        for (hash, stored_hits, _) in lookups {
-            let query = last_print[&hash];
-            let copies = multiplicity[&hash];
-            for stored in stored_hits {
-                if only_resource.is_some_and(|id| id != stored.resource_id)
-                    || self.skip.binary_search(&stored.resource_id).is_ok()
-                {
-                    continue;
+        // Each probe hash's stored hits, borrowed from a batched table where one exists. A full-
+        // store question without a caller's table builds one: the same hits as per-hash `lookup`
+        // (Store::lookup_table's contract), walking each shard once instead of bisecting it per
+        // hash.
+        let owned_table;
+        let owned_lists: Vec<(u64, Vec<StoredHit>, bool)>;
+        let mut lists: Vec<(u64, &[StoredHit])> = Vec::with_capacity(hashes.len());
+        if let Some(resource_id) = only_resource {
+            owned_lists = hashes
+                .par_iter()
+                .map(|&hash| {
+                    let hits = self.store.lookup_resource(hash, resource_id)?;
+                    // Only globally present hashes enter Panako's map (its iteration capacity).
+                    Ok((hash, hits, self.store.has_match(hash)?))
+                })
+                .collect::<Result<_>>()?;
+            lists.extend(
+                owned_lists
+                    .iter()
+                    .filter(|(_, _, present)| *present)
+                    .map(|(hash, hits, _)| (*hash, &hits[..])),
+            );
+        } else {
+            let table = match table {
+                Some(table) => table,
+                None => {
+                    owned_table = self.store.lookup_table(&hashes)?;
+                    &owned_table
                 }
-                let hit = Hit {
-                    ref_t: stored.t,
-                    ref_f: stored.f,
-                    q_t: query.t,
-                    q_f: query.f,
-                    original_hash: hash,
-                    matched_hash: stored.matched_hash,
+            };
+            // A caller's table should cover the probe; any hash it lacks is looked up directly.
+            owned_lists = hashes
+                .iter()
+                .filter(|&&hash| table.get(hash).is_none())
+                .map(|&hash| Ok((hash, self.store.lookup(hash)?, true)))
+                .collect::<Result<_>>()?;
+            let mut missing = owned_lists.iter();
+            for &hash in &hashes {
+                let hits = match table.get(hash) {
+                    Some(hits) => hits,
+                    None => &missing.next().expect("looked up above").1[..],
                 };
-                by_resource
-                    .entry(stored.resource_id)
-                    .or_default()
-                    .extend(std::iter::repeat_n(hit, copies));
+                if !hits.is_empty() {
+                    lists.push((hash, hits));
+                }
             }
         }
+        let capacity = java_hash_map_capacity(lists.len());
+        lists.sort_by_key(|(hash, _)| (java_long_bucket(*hash, capacity), probe[hash].first));
 
-        let mut rows = Vec::new();
-        if multi_line {
-            let candidates: Vec<_> = by_resource
-                .into_par_iter()
-                .filter_map(|(resource_id, hits)| {
-                    (hits.len() >= QUERY_PROFILE.min_hits_unfiltered).then_some((resource_id, hits))
-                })
-                .map(|(resource_id, hits)| self.vote_lines(resource_id, hits, k, include_evidence))
-                .collect();
-            for candidate in candidates {
-                rows.extend(candidate?);
-            }
-        } else {
-            let candidates: Vec<_> = by_resource
-                .into_par_iter()
-                .filter_map(|(resource_id, hits)| {
-                    (hits.len() >= QUERY_PROFILE.min_hits_unfiltered).then_some((resource_id, hits))
-                })
-                .map(|(resource_id, hits)| self.vote(resource_id, hits, include_evidence))
-                .collect();
-            for candidate in candidates {
-                if let Some(row) = candidate? {
-                    rows.push(row);
+        let mut groups = self.gather(&lists, &probe, only_resource)?;
+        let votes: Vec<Result<Vec<MatchRow>>> = groups
+            .split()
+            .into_par_iter()
+            .with_min_len(VOTE_CHUNK)
+            .map(|(resource_id, hits)| {
+                // Stable: equal-time hits keep their gathered order, which Panako's vote sees.
+                hits.sort_by_key(|hit| hit.q_t);
+                if multi_line {
+                    self.vote_lines(resource_id, hits, k, include_evidence)
+                } else {
+                    Ok(self
+                        .vote(resource_id, hits, include_evidence)?
+                        .into_iter()
+                        .collect())
                 }
-            }
+            })
+            .collect();
+        let mut rows = Vec::new();
+        for vote in votes {
+            rows.extend(vote?);
         }
         rows.sort_by(|a, b| {
             b.score
@@ -291,16 +290,99 @@ impl<'a> Matcher<'a> {
         Ok(rows)
     }
 
+    /// Every voting resource's hits, contiguous and in the order the reference path appends
+    /// them: probe hashes in `lists` order, each stored hit repeated once per probe copy. A
+    /// counting pass first sizes each resource and drops those under the unfiltered gate before
+    /// any hit is written, so the ~4/5 of touched resources that can never vote cost one counter
+    /// increment per posting instead of a vector.
+    fn gather(
+        &self,
+        lists: &[(u64, &[StoredHit])],
+        probe: &HashMap<u64, ProbeHash>,
+        only_resource: Option<u32>,
+    ) -> Result<Groups> {
+        const DROPPED: u32 = u32::MAX;
+        let votes = |id: u32| {
+            only_resource.is_none_or(|only| only == id) && self.skip.binary_search(&id).is_err()
+        };
+        let limit = self.store.resource_id_limit();
+        let mut cursor = vec![0_u32; limit];
+        for &(hash, hits) in lists {
+            let copies = probe[&hash].copies as u32;
+            for stored in hits {
+                let slot = cursor.get_mut(stored.resource_id as usize).ok_or_else(|| {
+                    Error::InvalidStore(format!(
+                        "posting references unknown resource {}",
+                        stored.resource_id
+                    ))
+                })?;
+                if votes(stored.resource_id) {
+                    *slot += copies;
+                }
+            }
+        }
+        let mut spans = Vec::new();
+        let mut total = 0_u32;
+        for (id, slot) in cursor.iter_mut().enumerate() {
+            let count = *slot;
+            if count as usize >= QUERY_PROFILE.min_hits_unfiltered {
+                spans.push((id as u32, count as usize));
+                *slot = total;
+                total += count;
+            } else {
+                *slot = DROPPED;
+            }
+        }
+        let blank = Hit {
+            ref_t: 0,
+            ref_f: 0,
+            q_t: 0,
+            q_f: 0,
+            original_hash: 0,
+            matched_hash: 0,
+        };
+        let mut hits = vec![blank; total as usize];
+        for &(hash, stored_hits) in lists {
+            let entry = &probe[&hash];
+            let query = entry.last;
+            for stored in stored_hits {
+                let slot = &mut cursor[stored.resource_id as usize];
+                if *slot == DROPPED || !votes(stored.resource_id) {
+                    continue;
+                }
+                let at = *slot as usize;
+                hits[at..at + entry.copies].fill(Hit {
+                    ref_t: stored.t,
+                    ref_f: stored.f,
+                    q_t: query.t,
+                    q_f: query.f,
+                    original_hash: hash,
+                    matched_hash: stored.matched_hash,
+                });
+                *slot += entry.copies as u32;
+            }
+        }
+        Ok(Groups { hits, spans })
+    }
+
+    /// `sorted` is one resource's hits sorted by probe time (stably, from gathered order).
     fn vote_lines(
         &self,
         resource_id: u32,
-        mut remaining: Vec<Hit>,
+        sorted: &[Hit],
         limit: usize,
         include_evidence: bool,
     ) -> Result<Vec<MatchRow>> {
         let mut rows = Vec::new();
-        while remaining.len() >= QUERY_PROFILE.min_hits_unfiltered && rows.len() < limit {
-            let Some(mut row) = self.vote(resource_id, remaining.clone(), true)? else {
+        // Most resources find no line at all: vote on the gathered slice and copy only once a
+        // line has to be removed. Removing hits keeps the rest sorted, so no re-sort is needed.
+        let mut remaining: Option<Vec<Hit>> = None;
+        loop {
+            let current = remaining.as_deref().unwrap_or(sorted);
+            if current.len() < QUERY_PROFILE.min_hits_unfiltered || rows.len() >= limit {
+                break;
+            }
+            let Some(mut row) = self.vote(resource_id, current, true)? else {
                 break;
             };
             let evidence = row
@@ -313,7 +395,8 @@ impl<'a> Matcher<'a> {
                     .entry((hit.q_t, hit.ref_t, hit.original_hash, hit.matched_hash))
                     .or_default() += 1;
             }
-            remaining.retain(|hit| {
+            let mut next = remaining.take().unwrap_or_else(|| sorted.to_vec());
+            next.retain(|hit| {
                 let key = (hit.q_t, hit.ref_t, hit.original_hash, hit.matched_hash);
                 let Some(count) = selected.get_mut(&key) else {
                     return true;
@@ -325,6 +408,7 @@ impl<'a> Matcher<'a> {
                     false
                 }
             });
+            remaining = Some(next);
             if include_evidence {
                 row.evidence = Some(evidence);
             }
@@ -333,13 +417,13 @@ impl<'a> Matcher<'a> {
         Ok(rows)
     }
 
+    /// `hits` must be sorted by probe time (stably, from gathered order), as Panako's are.
     fn vote(
         &self,
         resource_id: u32,
-        mut hits: Vec<Hit>,
+        hits: &[Hit],
         include_evidence: bool,
     ) -> Result<Option<MatchRow>> {
-        hits.sort_by_key(|hit| hit.q_t);
         let part_len = HIT_PART_MAX_SIZE.min(
             QUERY_PROFILE
                 .min_hits_unfiltered
@@ -374,8 +458,9 @@ impl<'a> Matcher<'a> {
             return Ok(None);
         }
 
-        let filtered: Vec<_> = hits
-            .into_iter()
+        let filtered: Vec<Hit> = hits
+            .iter()
+            .copied()
             .filter(|hit| {
                 let predicted = slope * hit.q_t as f32 + offset;
                 (hit.delta() as f32 - predicted).abs() <= crate::config::QUERY_RANGE as f32
@@ -423,26 +508,62 @@ impl<'a> Matcher<'a> {
     }
 }
 
-fn modal_delta(hits: &[Hit]) -> i64 {
-    let mut counts = HashMap::<i64, (usize, usize)>::new();
-    for (index, &hit) in hits.iter().enumerate() {
-        let value = counts.entry(hit.delta()).or_insert((0, index));
-        value.0 += 1;
+/// One distinct probe hash: Panako keeps the last print's (t, f), queues every copy, and orders
+/// equal-bucket hashes by first occurrence.
+struct ProbeHash {
+    last: Fingerprint,
+    copies: usize,
+    first: usize,
+}
+
+/// Voters per Rayon task: one vote is microseconds, so per-resource tasks would mostly measure
+/// scheduling.
+const VOTE_CHUNK: usize = 64;
+
+/// Gathered hits: `spans` are (resource id, len), consecutive runs of `hits`, ascending by id.
+struct Groups {
+    hits: Vec<Hit>,
+    spans: Vec<(u32, usize)>,
+}
+
+impl Groups {
+    fn split(&mut self) -> Vec<(u32, &mut [Hit])> {
+        let mut rest = &mut self.hits[..];
+        let mut parts = Vec::with_capacity(self.spans.len());
+        for &(id, len) in &self.spans {
+            let (part, tail) = rest.split_at_mut(len);
+            parts.push((id, part));
+            rest = tail;
+        }
+        parts
     }
-    let capacity = java_hash_map_capacity(counts.len());
-    counts
-        .into_iter()
-        .max_by(
-            |(delta_a, (count_a, first_a)), (delta_b, (count_b, first_b))| {
-                count_a
-                    .cmp(count_b)
-                    .then_with(|| {
-                        java_bucket(*delta_b, capacity).cmp(&java_bucket(*delta_a, capacity))
-                    })
-                    .then_with(|| first_b.cmp(first_a))
-            },
-        )
-        .map(|(delta, _)| delta)
+}
+
+/// The most common time offset, ties broken as Java's HashMap iteration would break them.
+fn modal_delta(hits: &[Hit]) -> i64 {
+    let mut deltas: Vec<(i64, usize)> = hits
+        .iter()
+        .enumerate()
+        .map(|(index, hit)| (hit.delta(), index))
+        .collect();
+    deltas.sort_unstable();
+    // One (delta, count, first index) per distinct offset.
+    let mut runs: Vec<(i64, usize, usize)> = Vec::new();
+    for &(delta, index) in &deltas {
+        match runs.last_mut() {
+            Some(run) if run.0 == delta => run.1 += 1,
+            _ => runs.push((delta, 1, index)),
+        }
+    }
+    let capacity = java_hash_map_capacity(runs.len());
+    runs.into_iter()
+        .max_by(|(delta_a, count_a, first_a), (delta_b, count_b, first_b)| {
+            count_a
+                .cmp(count_b)
+                .then_with(|| java_bucket(*delta_b, capacity).cmp(&java_bucket(*delta_a, capacity)))
+                .then_with(|| first_b.cmp(first_a))
+        })
+        .map(|(delta, _, _)| delta)
         .expect("modal vote requires hits")
 }
 
@@ -496,6 +617,10 @@ fn make_evidence(filtered: &[Hit], density: &BTreeMap<u32, usize>) -> Evidence {
 }
 
 #[cfg(test)]
+#[path = "matcher_reference.rs"]
+mod reference;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -514,6 +639,199 @@ mod tests {
     fn modal_vote_matches_java_hash_map_tie_order() {
         // Integer 20 lands in bucket 4 and 10 in bucket 10 of Java's initial table.
         assert_eq!(modal_delta(&[hit(0, 10), hit(0, 20)]), 20);
+    }
+
+    use std::path::{Path, PathBuf};
+
+    use crate::{DumpResource, ResourceMeta, load_dump_dir};
+
+    /// A tiny deterministic generator: the test must not depend on a random crate's stream.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    fn dump(key: &str, prints: Vec<Fingerprint>) -> DumpResource {
+        DumpResource {
+            meta: ResourceMeta {
+                source_id: "1".into(),
+                key: key.into(),
+                duration: 300.0,
+                declared_prints: prints.len() as u64,
+            },
+            prints,
+            prints_path: PathBuf::new(),
+        }
+    }
+
+    /// Crowded on purpose: a small hash space makes the +-2 neighbourhoods long and shared,
+    /// resources reuse each other's material at new offsets (several lines per pair), and some
+    /// resources repeat a hash at one time with different bins.
+    fn crowded_store(root: &Path, rng: &mut Rng) -> (Store, Vec<Vec<Fingerprint>>) {
+        let mut sources: Vec<Vec<Fingerprint>> = Vec::new();
+        for index in 0..48 {
+            let mut prints = Vec::new();
+            let mut t = rng.below(50) as u32;
+            for _ in 0..(300 + rng.below(700)) {
+                t += 1 + rng.below(12) as u32;
+                let hash = rng.below(6_000);
+                let f = 100 + rng.below(300) as u16;
+                prints.push(Fingerprint::new(hash, t, f));
+                if rng.below(40) == 0 {
+                    prints.push(Fingerprint::new(hash, t, f + 1));
+                }
+            }
+            if index >= 8 {
+                // Borrow a stretch of an earlier source at a new offset (a shared passage).
+                let donor = &sources[rng.below(index as u64) as usize];
+                let from = rng.below(donor.len() as u64 / 2) as usize;
+                let shift = 2_000 + rng.below(3_000) as u32;
+                for print in &donor[from..(from + 200).min(donor.len())] {
+                    prints.push(Fingerprint::new(print.hash, print.t + shift, print.f));
+                }
+            }
+            sources.push(prints);
+        }
+        let resources = sources
+            .iter()
+            .enumerate()
+            .map(|(index, prints)| dump(&format!("r{index:02}"), prints.clone()))
+            .collect();
+        (
+            Store::build(root, resources).expect("crowded store"),
+            sources,
+        )
+    }
+
+    /// Probes: excerpts at an offset, with repeated hashes (Panako's last-print quirk and copy
+    /// multiplicity), slight time stretch and unrelated noise.
+    fn probes(sources: &[Vec<Fingerprint>], rng: &mut Rng, count: usize) -> Vec<Vec<Fingerprint>> {
+        (0..count)
+            .map(|_| {
+                let source = &sources[rng.below(sources.len() as u64) as usize];
+                let from = rng.below(source.len() as u64 / 2) as usize;
+                let to = (from + 100 + rng.below(600) as usize).min(source.len());
+                let stretch = [1.0, 1.0, 1.03, 0.97][rng.below(4) as usize];
+                let mut prints: Vec<Fingerprint> = source[from..to]
+                    .iter()
+                    .map(|print| {
+                        let t = (f64::from(print.t) * stretch) as u32 + 7;
+                        Fingerprint::new(print.hash, t, print.f)
+                    })
+                    .collect();
+                for _ in 0..rng.below(80) {
+                    let copy = prints[rng.below(prints.len() as u64) as usize];
+                    prints.push(Fingerprint::new(
+                        copy.hash,
+                        copy.t + rng.below(400) as u32,
+                        copy.f,
+                    ));
+                }
+                for _ in 0..rng.below(120) {
+                    prints.push(Fingerprint::new(
+                        rng.below(6_000),
+                        rng.below(5_000) as u32,
+                        100 + rng.below(300) as u16,
+                    ));
+                }
+                prints
+            })
+            .collect()
+    }
+
+    fn json<T: serde::Serialize>(value: &T) -> String {
+        serde_json::to_string(value).expect("serializable")
+    }
+
+    /// Every public question the matcher answers, through the optimized path and the reference
+    /// path, must serialize identically: scores, lines, factors, evidence hit order and all.
+    fn assert_same_answers(store: &Store, probes: &[Vec<Fingerprint>]) {
+        let keys: Vec<&str> = store.resources().iter().map(|r| r.key.as_str()).collect();
+        let skipping = Matcher::skipping(store, &keys[..3]);
+        let plain = Matcher::new(store);
+        let mut compared_rows = 0;
+        for (index, prints) in probes.iter().enumerate() {
+            let hashes: Vec<u64> = prints.iter().map(|print| print.hash).collect();
+            let table = store.lookup_table(&hashes).unwrap();
+            for matcher in [&plain, &skipping] {
+                for multi_line in [false, true] {
+                    for (k, evidence) in [(1, false), (5, true), (100, true), (100, false)] {
+                        for with_table in [false, true] {
+                            let table = with_table.then_some(&table);
+                            let fast = matcher
+                                .match_restricted_with(prints, k, evidence, multi_line, None, table)
+                                .unwrap();
+                            let reference = matcher
+                                .reference_match(prints, k, evidence, multi_line, None, table)
+                                .unwrap();
+                            assert_eq!(
+                                json(&fast),
+                                json(&reference),
+                                "probe {index}, multi_line {multi_line}, k {k}"
+                            );
+                            compared_rows += fast.len();
+                        }
+                    }
+                }
+            }
+            let target = store.resource(keys[index % keys.len()]).unwrap().id;
+            for multi_line in [false, true] {
+                let fast = plain
+                    .match_restricted_with(prints, 5, true, multi_line, Some(target), None)
+                    .unwrap();
+                let reference = plain
+                    .reference_match(prints, 5, true, multi_line, Some(target), None)
+                    .unwrap();
+                assert_eq!(json(&fast), json(&reference), "probe {index} pair");
+            }
+        }
+        // The comparison must have exercised real matches, not agreed on empty answers.
+        assert!(
+            compared_rows > probes.len() * 20,
+            "only {compared_rows} rows"
+        );
+    }
+
+    #[test]
+    fn lean_gather_equals_reference_on_a_crowded_store() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let (store, sources) = crowded_store(root.path(), &mut rng);
+        let probes = probes(&sources, &mut rng, 60);
+        assert_same_answers(&store, &probes);
+    }
+
+    #[test]
+    fn lean_gather_equals_reference_on_fixture_prints() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/store-dump");
+        let resources = load_dump_dir(&dir).expect("fixture dump");
+        let sources: Vec<Vec<Fingerprint>> = resources.iter().map(|r| r.prints.clone()).collect();
+        let store = Store::build(root.path(), resources).expect("fixture store");
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let probes = probes(&sources, &mut rng, 16);
+        assert_same_answers(&store, &probes);
+    }
+
+    #[test]
+    fn modal_vote_matches_reference_on_ties() {
+        let mut rng = Rng(7);
+        for _ in 0..2_000 {
+            let hits: Vec<Hit> = (0..1 + rng.below(40))
+                .map(|_| hit(rng.below(30) as u32, rng.below(30) as u32))
+                .collect();
+            assert_eq!(modal_delta(&hits), reference::reference_modal_delta(&hits));
+        }
     }
 
     #[test]

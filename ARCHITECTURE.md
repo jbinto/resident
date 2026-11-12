@@ -50,6 +50,21 @@ presence: Panako-compatible iteration order depends on the global matching-hash 
 unrelated hits never enter the target voter. Unrestricted fan-out materializes all matching hits.
 Both paths therefore feed the same ordered target hits to the voter.
 
+### RAM index (opt-in)
+
+`daemon --ram-index` builds `core/src/ram_index.rs` at open and after every daemon write: the live
+inverted postings of every segment, held in process memory and partitioned by hash rather than by
+resource. A 34-bit hash names one of 64 partitions (top 6 bits) and one of 2^20 buckets in it (next
+20 bits); each posting is one sorted `u64` key `suffix:8 | shard:6 | rank:16 | t:24 | f:10`, where
+`rank` orders resource ids within their shard. A ±2 lookup reads one bucket (rarely two) instead of
+binary-searching 64 shard indexes, and touches no mapped page, so the minor faults of a cold
+mapping go away. It returns the mapped lookup's hits in the mapped order (shard-major, then hash,
+resource, time, frequency), so every caller's answers are unchanged; a test holds them equal across
+segments and tombstones. Cost: 8 bytes a posting plus 256 MiB of bucket offsets, and about 0.5
+core-seconds per 23.5 million postings to build. Postings that do not fit the key (over 65,536
+resources in one shard, t at or past 2^24 bins, f past 1,023) fail the open with `unsupported`
+instead of falling back. Forward postings stay mapped.
+
 `core/src/mmap_view.rs` is the sole unsafe-code exception. Its invariant is that published
 shard paths are immutable and the backing file remains open for the mapping's lifetime.
 
@@ -117,8 +132,14 @@ atomically publishes, reopens, and compares all immutable resource facts as a po
 
 `core/src/matcher.rs` performs a ±2 hash lookup, groups hits by resource, fits Panako's
 dominant offset line, applies factor/residual/duration/coverage gates, and returns stable
-score-descending rows. Lookup of distinct probe hashes is parallel; voting per candidate is
-parallel. Evidence retains filtered hits, leading offset bins, and per-second density only
+score-descending rows. An unrestricted question batches its lookups (`Store::lookup_table`)
+and borrows the hit lists; a counting pass then sizes each resource and drops those under the
+unfiltered gate before any hit is copied, and a placing pass writes the survivors' hits into one
+contiguous buffer, in the order the reference path appended them. Each resource's hits are stably
+sorted by probe time once; voting runs in parallel chunks over those slices, and the multiline
+loop copies a resource's hits only after it finds a line. `core/src/matcher_reference.rs` keeps the
+previous straightforward path as a test oracle; tests require byte-identical rows on crowded and
+fixture stores. Evidence retains filtered hits, leading offset bins, and per-second density only
 when requested.
 
 The off-by-default `multi_line` mode applies that unchanged voter repeatedly to each resource.
@@ -190,7 +211,7 @@ fact must not change passage identity.
 
 ## Process edge
 
-`resident daemon --store PATH [--workers N]` reads one JSON request per stdin line. N plain request
+`resident daemon --store PATH [--workers N] [--ram-index]` reads one JSON request per stdin line. N plain request
 threads (default: one per Rayon thread) execute requests concurrently, each handing its parallel
 work to the global Rayon pool; a bounded queue of N lines sits between stdin and them, so a caller
 that floods stdin is held back rather than buffered. Requests are never Rayon tasks themselves: a

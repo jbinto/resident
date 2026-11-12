@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 struct State {
     root: PathBuf,
+    ram_index: bool,
     store: RwLock<Option<Arc<Store>>>,
     writer: Mutex<()>,
 }
@@ -153,14 +154,15 @@ fn default_crosscheck_k() -> usize {
 /// Rayon worker can still steal another in-flight request's work, so nesting is bounded by
 /// `workers`, not by the backlog. The stdin reader blocks once `workers` more lines are queued, so a
 /// flood is backpressure, not memory.
-pub(crate) fn run(root: PathBuf, workers: usize) -> anyhow::Result<()> {
+pub(crate) fn run(root: PathBuf, workers: usize, ram_index: bool) -> anyhow::Result<()> {
     let store = match Store::open(&root) {
-        Ok(store) => Some(Arc::new(store)),
+        Ok(store) => Some(Arc::new(serving(store, ram_index)?)),
         Err(Error::StoreMissing(_)) => None,
         Err(error) => return Err(error.into()),
     };
     let state = Arc::new(State {
         root,
+        ram_index,
         store: RwLock::new(store),
         writer: Mutex::new(()),
     });
@@ -468,7 +470,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                 .store
                 .write()
                 .map_err(|_| Error::Internal("store lock poisoned".into()))? =
-                Some(Arc::new(store));
+                Some(Arc::new(serving(store, state.ram_index)?));
             serde_json::to_value(stats)
                 .map_err(|error| Error::Internal(format!("serialize ingest result: {error}")))
         }
@@ -482,7 +484,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                 .store
                 .write()
                 .map_err(|_| Error::Internal("store lock poisoned".into()))? =
-                Some(Arc::new(store));
+                Some(Arc::new(serving(store, state.ram_index)?));
             serde_json::to_value(stats)
                 .map_err(|error| Error::Internal(format!("serialize retire result: {error}")))
         }
@@ -538,7 +540,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                 .store
                 .write()
                 .map_err(|_| Error::Internal("store lock poisoned".into()))? =
-                Some(Arc::new(store));
+                Some(Arc::new(serving(store, state.ram_index)?));
             Ok(json!({
                 "generation": stats.generation,
                 "postings_added": stats.postings_added,
@@ -553,6 +555,21 @@ fn prints_to_wire(prints: &[Fingerprint]) -> Vec<[u64; 3]> {
         .iter()
         .map(|print| [print.hash, u64::from(print.t), u64::from(print.f)])
         .collect()
+}
+
+/// The store as this daemon serves it: with `--ram-index`, its inverted index loaded into memory.
+/// A failed load is an error, never a silent fallback to the mapped path.
+fn serving(mut store: Store, ram_index: bool) -> resident_core::Result<Store> {
+    if ram_index {
+        let stats = store.load_ram_index()?;
+        tracing::info!(
+            postings = stats.postings,
+            bytes = stats.bytes,
+            build_seconds = stats.build_seconds,
+            "ram index loaded"
+        );
+    }
+    Ok(store)
 }
 
 fn snapshot(state: &State) -> resident_core::Result<Option<Arc<Store>>> {
@@ -654,6 +671,7 @@ mod tests {
     fn malformed_line_has_null_id_and_typed_error() {
         let state = State {
             root: PathBuf::from("absent"),
+            ram_index: false,
             store: RwLock::new(None),
             writer: Mutex::new(()),
         };
@@ -666,6 +684,7 @@ mod tests {
     fn unknown_verb_is_unsupported() {
         let state = State {
             root: PathBuf::from("absent"),
+            ram_index: false,
             store: RwLock::new(None),
             writer: Mutex::new(()),
         };
@@ -758,6 +777,7 @@ mod tests {
     fn passage_verbs_reach_dispatch() {
         let state = State {
             root: PathBuf::from("absent"),
+            ram_index: false,
             store: RwLock::new(None),
             writer: Mutex::new(()),
         };
@@ -768,5 +788,38 @@ mod tests {
             let response = process_line(&state, request);
             assert_eq!(response["error"]["kind"], "store_missing");
         }
+    }
+
+    #[test]
+    fn ram_index_daemon_answers_like_the_mapped_daemon() {
+        let dump = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/store-dump");
+        let first = resident_core::load_dump_dir(&dump).unwrap().remove(0);
+        let wire: Vec<[u64; 3]> = prints_to_wire(&first.prints[200..2_200]);
+        let answers = |ram_index: bool| {
+            let root = tempfile::tempdir().unwrap();
+            let state = State {
+                root: root.path().to_path_buf(),
+                ram_index,
+                store: RwLock::new(None),
+                writer: Mutex::new(()),
+            };
+            let ingest = json!({"id": "i", "verb": "ingest", "dump_dir": dump});
+            assert_eq!(process_line(&state, &ingest.to_string())["ok"], true);
+            assert_eq!(
+                required_store(&state).unwrap().ram_index_loaded(),
+                ram_index,
+                "the swapped-in store must serve from the RAM index when asked"
+            );
+            let ask = |verb: &str| {
+                let request = json!({"id": verb, "verb": verb, "prints": wire, "k": 5,
+                    "evidence": true, "multi_line": true});
+                process_line(&state, &request.to_string())
+            };
+            (ask("match"), ask("candidates"))
+        };
+        let (mapped, ram) = (answers(false), answers(true));
+        assert!(!mapped.0["rows"].as_array().unwrap().is_empty());
+        assert!(!mapped.1["candidates"].as_array().unwrap().is_empty());
+        assert_eq!(mapped, ram);
     }
 }

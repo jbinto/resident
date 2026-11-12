@@ -9,6 +9,7 @@ pub mod fingerprint;
 pub mod matcher;
 mod mmap_view;
 pub mod passage;
+pub mod ram_index;
 pub mod span;
 pub mod store;
 
@@ -28,6 +29,7 @@ pub use passage::{
     PassageQuality, PassageSnapshot, SameAudioCandidate, SupportSpan, discover_passages_between,
     passages_between,
 };
+pub use ram_index::RamIndexStats;
 pub use span::{
     CrosscheckMatch, Segment, crosscheck, crosscheck_between, crosscheck_between_multiline,
     crosscheck_multiline, span, span_between, span_between_multiline, span_multiline,

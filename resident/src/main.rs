@@ -219,6 +219,10 @@ enum Command {
         /// Requests in flight at once (0 = one per CPU thread). More lines wait unread on stdin.
         #[arg(long, default_value_t = 0)]
         workers: usize,
+        /// Hold the inverted index in memory (8 bytes a posting), built at open and after each
+        /// write: lookups stop faulting through the mapped shards. Answers are unchanged.
+        #[arg(long)]
+        ram_index: bool,
     },
     /// Extract native fingerprints from an audio file.
     Extract { audio_path: PathBuf },
@@ -534,7 +538,11 @@ fn main() -> anyhow::Result<()> {
             let (_, stats) = Store::set_durations(&store, &expected_generation, updates)?;
             println!("{}", serde_json::to_string_pretty(&stats)?);
         }
-        Command::Daemon { store, workers } => daemon::run(store, workers)?,
+        Command::Daemon {
+            store,
+            workers,
+            ram_index,
+        } => daemon::run(store, workers, ram_index)?,
         Command::Extract { audio_path } => {
             let extraction = extract_audio(&audio_path)?;
             let prints: Vec<_> = extraction
