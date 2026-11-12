@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use resident_core::{
-    Store, candidates, crosscheck_between, crosscheck_between_multiline, discover_passages_between,
-    extract_audio, load_dump_dir, load_prints, passages_between, probe_window, span_between,
-    span_between_multiline,
+    Store, candidates, candidates_among, crosscheck_between, crosscheck_between_multiline,
+    discover_passages_between, extract_audio, load_dump_dir, load_prints, passages_between,
+    probe_window, span_between, span_between_multiline,
 };
 
 mod ab_compare;
@@ -67,6 +67,9 @@ enum Command {
         stop: Option<f64>,
         #[arg(long, default_value_t = 5)]
         k: usize,
+        /// Score only this stored reference (a pair check). Repeat for each.
+        #[arg(long = "target")]
+        targets: Vec<String>,
     },
     /// Print store statistics as JSON.
     Stats {
@@ -345,6 +348,7 @@ fn main() -> anyhow::Result<()> {
             start,
             stop,
             k,
+            targets,
         } => {
             let (prints, duration) = match (prints_path, audio) {
                 (Some(path), None) => (load_prints(&path)?, None),
@@ -356,7 +360,11 @@ fn main() -> anyhow::Result<()> {
             };
             let (prints, duration) = probe_window(prints, start.zip(stop), duration)?;
             let store = Store::open(&store)?;
-            let found = candidates(&store, &prints, duration, k)?;
+            let found = if targets.is_empty() {
+                candidates(&store, &prints, duration, k)?
+            } else {
+                candidates_among(&store, &prints, duration, &targets, k)?
+            };
             println!("{}", serde_json::to_string_pretty(&found)?);
         }
         Command::Stats { store } => {

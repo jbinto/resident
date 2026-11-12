@@ -51,7 +51,7 @@ may therefore repeat a `ref_key` at distinct offsets.
 ### candidates — which references a probe contains, with coverage both ways
 ```
 {"prints": [[hash, t, f], ...] | "prints_path": "<.tdb>" | "audio_path": "<file>",
- "window": [t0, t1] | null, "k": 5}
+ "window": [t0, t1] | null, "k": 5, "targets": ["key", ...] | null}
 ```
 → `{"candidates": [{"ref_key": "...", "matched_hits": N, "query_matched_seconds": s,
 "reference_matched_seconds": s, "query_coverage": f, "reference_coverage": f,
@@ -73,8 +73,10 @@ first-to-last-hit spans, so a sparse line can span much of a window. Supported c
 (neither: an edit, a version, a sample, a short overlap, a vocal against its instrumental). It is
 geometry, not a verdict on identity; naming stays with the caller. Rows sort by `matched_hits`,
 then key, truncated to `k`. With `audio_path`, the window is cut from the whole file's prints, so
-the window keeps its analysis context. CLI: `resident candidates --store S (--prints-path P |
---audio A) [--start s --stop s] [--k N]`.
+the window keeps its analysis context. With `targets`, only those stored keys are scored (a pair
+check): each target's row is exactly its row in an unbounded answer, targets the probe does not
+match are absent, an unknown key is an error, and `k` still caps the rows. CLI: `resident
+candidates --store S (--prints-path P | --audio A) [--start s --stop s] [--k N] [--target KEY ...]`.
 
 ### span — store-vs-store: A's stored prints over a window, against B
 ```

@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use resident_core::config::{MAX_FREQUENCY_BIN, MAX_HASH, bins_to_seconds};
 use resident_core::{
-    DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, candidates, crosscheck_between,
-    crosscheck_between_multiline, discover_passages_between, extract_audio, load_dump_dir,
-    load_prints, passages_between, probe_window, span_between, span_between_multiline,
+    DumpResource, Error, Fingerprint, Matcher, ResourceMeta, Store, candidates, candidates_among,
+    crosscheck_between, crosscheck_between_multiline, discover_passages_between, extract_audio,
+    load_dump_dir, load_prints, passages_between, probe_window, span_between,
+    span_between_multiline,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -32,6 +33,8 @@ enum Request {
         window: Option<[f64; 2]>,
         #[serde(default = "default_candidates_k")]
         k: usize,
+        #[serde(default)]
+        targets: Option<Vec<String>>,
     },
     Match {
         #[serde(default)]
@@ -297,6 +300,7 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
             audio_path,
             window,
             k,
+            targets,
         } => {
             let (prints, duration) = match audio_path {
                 Some(audio_path) => {
@@ -316,7 +320,11 @@ fn handle(state: &State, request: Request) -> resident_core::Result<Value> {
                 duration,
             )?;
             let store = required_store(state)?;
-            Ok(json!({ "candidates": candidates(&store, &prints, duration, k)? }))
+            let found = match targets {
+                Some(targets) => candidates_among(&store, &prints, duration, &targets, k)?,
+                None => candidates(&store, &prints, duration, k)?,
+            };
+            Ok(json!({ "candidates": found }))
         }
         Request::Match {
             prints,

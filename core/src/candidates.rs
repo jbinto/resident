@@ -69,6 +69,37 @@ pub fn candidates(
     query_duration: Option<f64>,
     k: usize,
 ) -> Result<Vec<Candidate>> {
+    ranked(store, prints, query_duration, k, None)
+}
+
+/// `candidates` scored against `targets` only (TARGETED-CANDIDATES): a pair check of a probe
+/// against references the caller already suspects. Each target's row is the row an unbounded
+/// `candidates` gives it, field for field; targets the probe does not match are absent. Only the
+/// targets' shards are gathered and voted, so the cost follows the targets, not the store.
+pub fn candidates_among(
+    store: &Store,
+    prints: &[Fingerprint],
+    query_duration: Option<f64>,
+    targets: &[String],
+    k: usize,
+) -> Result<Vec<Candidate>> {
+    if targets.is_empty() {
+        return Err(Error::BadRequest("targets must not be empty".into()));
+    }
+    let ids = targets
+        .iter()
+        .map(|key| store.resource(key).map(|resource| resource.id))
+        .collect::<Result<Vec<u32>>>()?;
+    ranked(store, prints, query_duration, k, Some(&ids))
+}
+
+fn ranked(
+    store: &Store,
+    prints: &[Fingerprint],
+    query_duration: Option<f64>,
+    k: usize,
+    targets: Option<&[u32]>,
+) -> Result<Vec<Candidate>> {
     if prints.is_empty() {
         return Err(Error::BadRequest("probe prints must not be empty".into()));
     }
@@ -92,7 +123,12 @@ pub fn candidates(
     }
     let regions: Vec<Vec<Fingerprint>> = regions.into_values().collect();
     let hashes: Vec<u64> = regions.iter().flatten().map(|print| print.hash).collect();
-    let table = store.lookup_table(&hashes)?;
+    // A target-only table keeps the store-wide presence of every hash, which orders the voter's
+    // hits (Panako's hash-map capacity), so the targets' rows are unchanged.
+    let table = match targets {
+        Some(ids) => store.lookup_table_among(&hashes, ids)?,
+        None => store.lookup_table(&hashes)?,
+    };
     let matcher = Matcher::new(store);
     let all = store.resources().len().max(1);
     let rows: Vec<Result<Vec<MatchRow>>> = regions
