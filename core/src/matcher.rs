@@ -208,19 +208,20 @@ impl<'a> Matcher<'a> {
         let lookups: Vec<Result<(u64, Vec<StoredHit>, bool)>> = hashes
             .par_iter()
             .map(|&hash| {
-                let hits = only_resource.map_or_else(
-                    || match table.and_then(|table| table.get(hash)) {
-                        Some(hits) => Ok(hits.to_vec()),
-                        None => self.store.lookup(hash),
-                    },
-                    |resource_id| self.store.lookup_resource(hash, resource_id),
-                )?;
-                let global_present = if only_resource.is_some() {
-                    self.store.has_match(hash)?
-                } else {
-                    !hits.is_empty()
-                };
-                Ok((hash, hits, global_present))
+                if let Some(resource_id) = only_resource {
+                    let hits = self.store.lookup_resource(hash, resource_id)?;
+                    return Ok((hash, hits, self.store.has_match(hash)?));
+                }
+                // A table may hold only some resources' hits (`lookup_table_among`), so presence
+                // comes from the table, not from whether its hits are empty.
+                match table.and_then(|table| table.entry(hash)) {
+                    Some((hits, present)) => Ok((hash, hits.to_vec(), present)),
+                    None => {
+                        let hits = self.store.lookup(hash)?;
+                        let present = !hits.is_empty();
+                        Ok((hash, hits, present))
+                    }
+                }
             })
             .collect();
         let mut lookups: Vec<_> = lookups.into_iter().collect::<Result<Vec<_>>>()?;

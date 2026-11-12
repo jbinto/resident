@@ -186,18 +186,31 @@ pub struct StoredHit {
     pub matched_hash: u64,
 }
 
-/// Precomputed `Store::lookup` results for a fixed hash set (see `Store::lookup_table`).
+/// Precomputed `Store::lookup` results for a fixed hash set (see `Store::lookup_table`), or
+/// only some resources' share of them (see `Store::lookup_table_among`).
 pub struct LookupTable {
     hashes: Vec<u64>,
     hits: Vec<StoredHit>,
     offsets: Vec<usize>,
+    /// Per hash: whether its lookup range occurs anywhere in the store (`Store::has_match`),
+    /// which a table holding only some resources' hits cannot tell from its own hits.
+    present: Vec<bool>,
 }
 
 impl LookupTable {
     /// The hits `Store::lookup(hash)` returns, or None when `hash` was not in the batch.
     pub fn get(&self, hash: u64) -> Option<&[StoredHit]> {
+        self.entry(hash).map(|(hits, _)| hits)
+    }
+
+    /// The table's hits for `hash` and whether the hash occurs anywhere in the store, or None
+    /// when `hash` was not in the batch.
+    pub fn entry(&self, hash: u64) -> Option<(&[StoredHit], bool)> {
         let index = self.hashes.binary_search(&hash).ok()?;
-        Some(&self.hits[self.offsets[index]..self.offsets[index + 1]])
+        Some((
+            &self.hits[self.offsets[index]..self.offsets[index + 1]],
+            self.present[index],
+        ))
     }
 }
 
@@ -1052,10 +1065,80 @@ impl Store {
             }
         }
         offsets.push(hits.len());
+        let present = offsets.windows(2).map(|pair| pair[1] > pair[0]).collect();
         Ok(LookupTable {
             hashes,
             hits,
             offsets,
+            present,
+        })
+    }
+
+    /// `lookup_table` cut down to the resources `resource_ids`: each hash's hits are exactly
+    /// `lookup_table`'s hits of those resources, in the same order, and `entry` still says whether
+    /// the hash occurs anywhere in the store. Every posting of a resource lives in its key-selected
+    /// shard, so only the targets' shards are gathered; the other shards are asked only whether
+    /// the hashes not yet seen occur there, and in a dense store few are left to ask.
+    pub fn lookup_table_among(&self, hashes: &[u64], resource_ids: &[u32]) -> Result<LookupTable> {
+        use rayon::prelude::*;
+        let mut hashes: Vec<u64> = hashes
+            .iter()
+            .copied()
+            .filter(|hash| *hash <= MAX_HASH)
+            .collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        let mut ids = resource_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut numbers = Vec::with_capacity(ids.len());
+        for &id in &ids {
+            numbers.push(self.resource_by_id(id)?.shard as usize);
+        }
+        numbers.sort_unstable();
+        numbers.dedup();
+
+        let per_shard = numbers
+            .par_iter()
+            .map(|&number| self.lookup_sorted_shard(number, &hashes))
+            .collect::<Vec<Result<_>>>()
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let mut present = vec![false; hashes.len()];
+        let mut hits = Vec::new();
+        let mut offsets = Vec::with_capacity(hashes.len() + 1);
+        for (index, present) in present.iter_mut().enumerate() {
+            offsets.push(hits.len());
+            // Shard order, as `lookup` appends them; a target's hits come from its own shard.
+            for (shard_hits, shard_offsets) in &per_shard {
+                let range = &shard_hits[shard_offsets[index]..shard_offsets[index + 1]];
+                *present |= !range.is_empty();
+                hits.extend(
+                    range
+                        .iter()
+                        .filter(|hit| ids.binary_search(&hit.resource_id).is_ok()),
+                );
+            }
+        }
+        offsets.push(hits.len());
+
+        // Presence in the other shards, asking each only about the hashes still unseen.
+        for number in (0..SHARD_COUNT as usize).filter(|number| !numbers.contains(number)) {
+            let unseen: Vec<usize> = (0..hashes.len()).filter(|&i| !present[i]).collect();
+            if unseen.is_empty() {
+                break;
+            }
+            let ask: Vec<u64> = unseen.iter().map(|&i| hashes[i]).collect();
+            let (_, ask_offsets) = self.lookup_sorted_shard(number, &ask)?;
+            for (position, &index) in unseen.iter().enumerate() {
+                present[index] = ask_offsets[position + 1] > ask_offsets[position];
+            }
+        }
+        Ok(LookupTable {
+            hashes,
+            hits,
+            offsets,
+            present,
         })
     }
 

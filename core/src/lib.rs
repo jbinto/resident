@@ -12,7 +12,9 @@ pub mod passage;
 pub mod span;
 pub mod store;
 
-pub use candidates::{COVERED_FRACTION, Candidate, Relation, candidates, probe_window};
+pub use candidates::{
+    COVERED_FRACTION, Candidate, Relation, candidates, candidates_among, probe_window,
+};
 pub use dump::{
     DumpResource, ResourceMeta, load_declared_prints, load_dump_dir, load_metadata, load_prints,
     scan_dump_dir,

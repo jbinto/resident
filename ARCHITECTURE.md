@@ -49,6 +49,10 @@ filtering other resources that share it. It also probes the 64 hash indexes for 
 presence: Panako-compatible iteration order depends on the global matching-hash count even though
 unrelated hits never enter the target voter. Unrestricted fan-out materializes all matching hits.
 Both paths therefore feed the same ordered target hits to the voter.
+`candidates` with `targets` (TARGETED-CANDIDATES) does the same for a set of targets in one batched
+walk: it gathers only the targets' shards, keeps their resources' hits in `lookup_table` order, and
+asks the other shards only whether the hashes not yet seen occur there (in a dense store almost
+none are left after the targets' shards). Each target's row equals its row in an unbounded answer.
 
 `core/src/mmap_view.rs` is the sole unsafe-code exception. Its invariant is that published
 shard paths are immutable and the backing file remains open for the mapping's lifetime.
