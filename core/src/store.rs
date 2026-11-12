@@ -229,7 +229,11 @@ pub struct Store {
     manifest: Manifest,
     resources_by_key: HashMap<String, usize>,
     resources_by_id: HashMap<u32, usize>,
+    /// One past the largest resource id: ids are dense enough to index per-query counters.
+    resource_id_limit: usize,
     segments: Vec<Segment>,
+    /// RAM-INDEX: when loaded, hash lookups read it instead of the mapped shards (same answers).
+    ram: Option<crate::ram_index::RamIndex>,
 }
 
 struct Segment {
@@ -934,12 +938,20 @@ impl Store {
             .enumerate()
             .map(|(index, resource)| (resource.id, index))
             .collect();
+        let resource_id_limit = manifest
+            .resources
+            .iter()
+            .map(|resource| resource.id as usize + 1)
+            .max()
+            .unwrap_or(0);
         Ok(Self {
             root: root.to_path_buf(),
             manifest,
             resources_by_key,
             resources_by_id,
+            resource_id_limit,
             segments,
+            ram: None,
         })
     }
 
@@ -972,6 +984,73 @@ impl Store {
             .get(key)
             .map(|index| &self.manifest.resources[*index])
             .ok_or_else(|| Error::BadRequest(format!("unknown resource key {key:?}")))
+    }
+
+    /// Hold the inverted index in process memory (RAM-INDEX): lookups stop touching the mapped
+    /// hash indexes and hits regions, at 8 bytes a posting. Answers are unchanged.
+    pub fn load_ram_index(&mut self) -> Result<crate::ram_index::RamIndexStats> {
+        let (ram, stats) = crate::ram_index::RamIndex::build(self)?;
+        self.ram = Some(ram);
+        Ok(stats)
+    }
+
+    pub const fn ram_index_loaded(&self) -> bool {
+        self.ram.is_some()
+    }
+
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Visit every live posting whose hash lies in `[low, high)`, segment by segment and shard by
+    /// shard: (hash, resource id, t, f). Tombstoned postings are skipped.
+    pub(crate) fn for_each_live_posting(
+        &self,
+        low: u64,
+        high: u64,
+        mut visit: impl FnMut(u64, u32, u32, u16),
+    ) -> Result<()> {
+        for segment in &self.segments {
+            for (number, shard) in segment.shards.iter().enumerate() {
+                let dead = &segment.dead[number];
+                let mut index = shard.lower_bound(low)?;
+                while index < shard.hash_count {
+                    let base = (shard.hash_index_offset + index * HASH_INDEX_SIZE) as usize;
+                    let hash = read_u64(&shard.map, base)?;
+                    if hash >= high {
+                        break;
+                    }
+                    let hit_start = read_u64(&shard.map, base + 8)?;
+                    let hit_len = read_u64(&shard.map, base + 16)?;
+                    let hit_end = hit_start
+                        .checked_add(hit_len)
+                        .filter(|end| *end <= shard.hit_count)
+                        .ok_or_else(|| {
+                            Error::InvalidStore("hash index points outside hits".into())
+                        })?;
+                    for hit_index in hit_start..hit_end {
+                        let offset = (shard.hits_offset + hit_index * HIT_SIZE) as usize;
+                        let resource_id = read_u32(&shard.map, offset)?;
+                        if !dead.is_empty() && dead.binary_search(&resource_id).is_ok() {
+                            continue;
+                        }
+                        visit(
+                            hash,
+                            resource_id,
+                            read_u32(&shard.map, offset + 4)?,
+                            read_u16(&shard.map, offset + 8)?,
+                        );
+                    }
+                    index += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// One past the largest resource id in this generation.
+    pub fn resource_id_limit(&self) -> usize {
+        self.resource_id_limit
     }
 
     pub fn resource_by_id(&self, id: u32) -> Result<&ResourceInfo> {
@@ -1007,6 +1086,10 @@ impl Store {
             .saturating_add(crate::config::QUERY_RANGE)
             .min(MAX_HASH);
         let mut hits = Vec::new();
+        if let Some(ram) = &self.ram {
+            ram.lookup_range(start, stop, &mut hits);
+            return Ok(hits);
+        }
         for number in 0..SHARD_COUNT as usize {
             self.lookup_shard_range(number, start, stop, &mut hits)?;
         }
@@ -1046,6 +1129,26 @@ impl Store {
             .collect();
         hashes.sort_unstable();
         hashes.dedup();
+        if let Some(ram) = &self.ram {
+            let mut hits = Vec::new();
+            let mut offsets = Vec::with_capacity(hashes.len() + 1);
+            for &hash in &hashes {
+                offsets.push(hits.len());
+                let start = hash.saturating_sub(crate::config::QUERY_RANGE);
+                let stop = hash
+                    .saturating_add(crate::config::QUERY_RANGE)
+                    .min(MAX_HASH);
+                ram.lookup_range(start, stop, &mut hits);
+            }
+            offsets.push(hits.len());
+            let present = offsets.windows(2).map(|pair| pair[1] > pair[0]).collect();
+            return Ok(LookupTable {
+                hashes,
+                hits,
+                offsets,
+                present,
+            });
+        }
         let per_shard: Vec<Result<(Vec<StoredHit>, Vec<usize>)>> = {
             use rayon::prelude::*;
             (0..SHARD_COUNT as usize)
@@ -1097,6 +1200,35 @@ impl Store {
         }
         numbers.sort_unstable();
         numbers.dedup();
+        if let Some(ram) = &self.ram {
+            // One bucket read per hash gives both the targets' hits and store-wide presence.
+            let mut hits = Vec::new();
+            let mut offsets = Vec::with_capacity(hashes.len() + 1);
+            let mut present = Vec::with_capacity(hashes.len());
+            let mut scratch = Vec::new();
+            for &hash in &hashes {
+                offsets.push(hits.len());
+                let start = hash.saturating_sub(crate::config::QUERY_RANGE);
+                let stop = hash
+                    .saturating_add(crate::config::QUERY_RANGE)
+                    .min(MAX_HASH);
+                scratch.clear();
+                ram.lookup_range(start, stop, &mut scratch);
+                present.push(!scratch.is_empty());
+                hits.extend(
+                    scratch
+                        .iter()
+                        .filter(|hit| ids.binary_search(&hit.resource_id).is_ok()),
+                );
+            }
+            offsets.push(hits.len());
+            return Ok(LookupTable {
+                hashes,
+                hits,
+                offsets,
+                present,
+            });
+        }
 
         let per_shard = numbers
             .par_iter()
@@ -1186,6 +1318,9 @@ impl Store {
         let stop = hash
             .saturating_add(crate::config::QUERY_RANGE)
             .min(MAX_HASH);
+        if let Some(ram) = &self.ram {
+            return Ok(ram.has_range(start, stop));
+        }
         let mut scratch = Vec::new();
         for segment in &self.segments {
             for (number, shard) in segment.shards.iter().enumerate() {
@@ -1219,8 +1354,12 @@ impl Store {
             .saturating_add(crate::config::QUERY_RANGE)
             .min(MAX_HASH);
         let mut hits = Vec::new();
-        self.segments[resource.segment as usize].shards[resource.shard as usize]
-            .lookup_range(start, stop, &mut hits)?;
+        if let Some(ram) = &self.ram {
+            ram.lookup_range(start, stop, &mut hits);
+        } else {
+            self.segments[resource.segment as usize].shards[resource.shard as usize]
+                .lookup_range(start, stop, &mut hits)?;
+        }
         hits.retain(|hit| hit.resource_id == resource_id);
         Ok(hits)
     }
@@ -1842,6 +1981,10 @@ fn shard_content_hash(resources: &[ResourceInfo]) -> String {
         digest.update(resource.content_hash.as_bytes());
     }
     hex::encode(digest.finalize())
+}
+
+pub(crate) const fn shard_count() -> u32 {
+    SHARD_COUNT
 }
 
 fn shard_for_key(key: &str) -> u32 {

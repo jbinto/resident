@@ -380,3 +380,23 @@ identity profile and endpoint hashes are unchanged. Reopen and compare immutable
 shard names as a postcondition. Passage ids exclude generation and duration; a test performs the same
 pair query before and after publication and requires identical ids. A complete no-change rerun is an
 idempotent zero-update result.
+
+## 2026-11-12 — lean gather and an opt-in RAM index, both answer-identical
+
+The unrestricted query path spent most of its time outside voting: 64 binary searches per probe
+hash in resource-sharded indexes, a copy of every looked-up hit, a SipHash map of per-resource
+vectors, and votes on resources that could never pass the unfiltered gate. Two changes remove that
+work without touching what Panako's voter sees.
+
+The matcher now counts hits per resource before copying any, keeps only resources at or above the
+unfiltered gate, and places their hits contiguously in the reference order. Only the per-resource
+hit sequence reaches a voter, and it is unchanged, so rows are unchanged. Sorting a resource's hits
+once and removing a line's hits from the sorted copy equals re-sorting after each removal, because
+the stable sort keys are total over (probe time, gathered position). The previous path stays as a
+test oracle and the tests compare serialized rows, evidence included.
+
+The RAM index is opt-in because it costs memory (8 bytes a posting) and open time, not because its
+answers differ: its lookups are equal to the mapped ones, element for element. It is the
+hash-partitioned layout proposed for the store format, held in memory instead of on disk; a disk
+format can follow if open time matters.
+
