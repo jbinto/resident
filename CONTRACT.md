@@ -6,6 +6,10 @@ Responses may interleave across requests (concurrent execution) — `id` correla
 so a caller may pipe any number of requests without the daemon buffering them. stderr is
 for logs only (never protocol). A future unix-socket transport will reuse these shapes.
 
+`--ram-index` holds the store's inverted index in memory (8 bytes a posting, built at open and
+after each write the daemon publishes). Every answer is identical to the mapped daemon's; a store
+whose postings do not fit the in-memory key fails at open with `unsupported`.
+
 ## Envelope
 
 Request: `{"id": "<caller string>", "verb": "<verb>", ...params}`
